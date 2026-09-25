@@ -1,0 +1,17 @@
+# 构建产物
+/dist/
+/with-linux
+/wl
+*.exe
+
+# Go
+/vendor/
+
+# 本地配置（含 apiKey，绝不入库）
+config.json
+
+# 临时调试
+*.log
+
+# 用户旧实现参考源码（不入库）
+usage-tui.js
