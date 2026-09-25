@@ -1,0 +1,11 @@
+Package: @PKG@
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: @ARCH@
+Maintainer: Lifeni <liangfengning@foxmail.com>
+Homepage: https://github.com/Lifeni/with-linux
+Description: Linux terminal toolbox (TUI), command name wl
+ Personal TUI toolbox for daily use on a Linux dev board over SSH.
+ Currently ships the "OpenCode Go usage" tool: dot-matrix progress,
+ reset countdown and auto polling.

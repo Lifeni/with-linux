@@ -1,0 +1,59 @@
+version: 2
+
+project_name: with-linux
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: wl
+    main: ./cmd/wl
+    binary: wl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+
+nfpms:
+  - package_name: wl
+    vendor: Lifeni
+    homepage: https://github.com/Lifeni/with-linux
+    maintainer: Lifeni <liangfengning@foxmail.com>
+    description: 个人自用的 Linux 终端工具箱（TUI），命令名 wl
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: Lifeni
+    name: with-linux
+  name_template: "v{{ .Version }}"
+  draft: false
+  prerelease: false

@@ -1,4 +1,4 @@
-module with-linux
+module github.com/Lifeni/with-linux
 
 go 1.27.1
 

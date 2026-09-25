@@ -12,7 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 
-	"with-linux/internal/usage"
+	"github.com/Lifeni/with-linux/internal/usage"
 )
 
 const title = "With Linux"
