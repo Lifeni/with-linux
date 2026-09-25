@@ -116,3 +116,11 @@ ok  	with-linux/internal/app	0.093s
 - 验证：单测断言首行/末行为空行、标签行在倒数第 2 行（`go test ./...` 全绿）；A2 smoke PASS 7/7（真实数据 9%/46%/40%）。
 - smoke 断言教训：不锁定真实数据快照值（5h 窗口滚动会漂移，8%→9% 曾致误判），改格式判据 `\[\d+%\]`×3。
 - `dist/` 两个产物已重建。
+
+## 2026-09-25 · v0.1.0 发版（GitHub）
+
+- 命令名 `wl`（`cmd/wl/` 结构）；标题改「With Linux」、状态栏按键提示大写（`Q`/`R`，`Q` 退出行为同步支持）；`TASK_PLAN.md`→`PLAN.md`；README 精简。
+- 验证：`go test ./...` 全绿（q/Q 双退出键）、A2 smoke PASS 7/7（帧实证新标题与提示）。
+- 仓库 https://github.com/Lifeni/with-linux（公开，MIT，GitHub 已识别）；Release v0.1.0 附 `with-linux-linux-{amd64,arm64}` 两个全静态产物。
+- 安装了 `gh` 2.23.0（华为云 Debian 镜像源，官方源下载超时）；gh 登录为 Lifeni（设备码流程由用户完成）。
+- `usage-tui.js`（旧实现参考）与 `config.json` 不入库。
