@@ -69,10 +69,10 @@
 
 ## 3. 目标机工具链（已查）
 
-- 本机即目标机：`aarch64`（arm64），`go1.27.1 linux/arm64`（输出自 `uname -m` / `go version`）。
-- 交付交叉编译：纯 Go 依赖（bubbletea/lipgloss/bubbles 均无 cgo），直接 `GOOS=linux GOARCH=amd64 go build` ＋ 本机 `go build` 即可，无需额外工具链。
+- 目标平台：Linux arm64 / amd64（依赖均为纯 Go 实现，无 cgo）。
+- 交付交叉编译：纯 Go 依赖（bubbletea/lipgloss/bubbles 均无 cgo），直接 `GOOS=linux GOARCH=amd64 go build` ＋ `GOOS=linux GOARCH=arm64 go build` 即可，无需额外工具链。
 - 实际交叉编译验证留到 M3（有产物后展示真实输出）。
 
 ## 4. 工作目录现状（已查）
 
-- `/home/you/codes/with-linux` 起始为空目录（仅本次落盘的 `AGENTS.md`、`TASK_PLAN.md`）；非 git 仓库。
+- 项目根目录起始为空（仅本次落盘的 `AGENTS.md`、`TASK_PLAN.md`）；当时非 git 仓库。

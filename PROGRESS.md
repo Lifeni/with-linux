@@ -7,7 +7,7 @@
 - 旧面板源码 `usage-tui.js` 由用户拷入，移植信息逐条记录于 `FINDINGS.md` §1。
 - Charm 三件套 v2 模块确认，规范路径为 `charm.land/*`（github.com/charmbracelet/*/v2 的 go.mod 声明为 charm.land，直接引用会报 module path 不匹配——实测踩过一次后改用 charm.land）。
 - v2 API 与 v1 差异（读源码确认）：`Init() Cmd`；`View() View`；alt-screen / 鼠标模式在 `View` 字段上声明（`v.AltScreen`、`v.MouseMode = tea.MouseModeCellMotion`），无 `WithAltScreen`/`WithMouse*` 选项；鼠标消息 `MouseClickMsg`/`MouseReleaseMsg`/`MouseWheelMsg`/`MouseMotionMsg`（`Mouse{X, Y, Button, Mod}`）；`tea.Quit` 可直接作 Cmd 返回。
-- 目标机即本机：aarch64 / go1.27.1；交叉编译走内建 `GOOS/GOARCH`（M3 实测）。
+- 目标平台 arm64/amd64；交叉编译走内建 `GOOS/GOARCH`（M3 实测）。
 
 ## 2026-09-25 · M1 TUI 骨架（代码完成，待用户实机鼠标验证）
 
@@ -30,7 +30,7 @@ ok  	with-linux/internal/app	0.093s
 
 （含"鼠标点击 tab 切换面板""点击 tab 区间外不切换""滚轮触底 clamp"三个真实行为断言。）
 
-### 验证 2：pty 真实运行 smoke（`/tmp/opencode/pty_smoke.py`）— PASS
+### 验证 2：pty 真实运行 smoke（本地临时脚本 `pty_smoke.py`）— PASS
 
 100x30 终端，真实进程渲染三帧 ＋ 退出码：
 
@@ -44,7 +44,7 @@ ok  	with-linux/internal/app	0.093s
 ### 待办（M1 收尾）
 
 - [ ] 用户在 SSH 终端实机验证：鼠标点击 tab、滚轮滚动、`q` 退出（v1 仅一个 tab，点击无可见切换，加第二个工具后肉眼可见）
-- 2026-09-25 用户说「继续」推进 M2；实机鼠标验证留给用户随时做。Windows 桌面弹窗路径已确认不可行（Windows 22 端口未开），已交给用户直连命令 `ssh -t you@192.168.31.3 /home/you/codes/with-linux/with-linux`。临时 tmux 会话 `with-linux` 已清理。
+- 2026-09-25 用户说「继续」推进 M2；实机鼠标验证留给用户随时做。桌面弹窗方案已确认不可行（相关端口未开），改为让用户直接在目标机终端运行程序。临时 tmux 会话已清理。
 
 ## 2026-09-25 · 文档重命名（用户指令）
 
@@ -66,7 +66,7 @@ ok  	with-linux/internal/app	0.093s
 帧1:  with-linux    [OpenCode Go 用量]
       未配置 Key
       请在配置文件里填入 apiKey：
-      /tmp/opencode/empty-xdg/with-linux/config.json
+      $XDG_CONFIG_HOME/with-linux/config.json
       {"apiKey": "你的 API Key"}
       OpenCode Go 用量 · q 退出 · ←→ 切换工具 · ↑↓/滚轮 滚动 · R 刷新   未配置 Key
 帧2:  滚轮+R+点击后进程存活（无画面变化时差异渲染不输出，属正常）
@@ -93,7 +93,7 @@ ok  	with-linux/internal/app	0.093s
 ## 2026-09-25 · M3 交付（完成）
 
 - `dist/with-linux-linux-amd64`（8.1M）/ `dist/with-linux-linux-arm64`（7.6M），均 `CGO_ENABLED=0` 全静态（首次构建 arm64 为动态链接，按"单一可执行文件"交付约束重建为静态），`file` 验证：`x86-64, statically linked` / `ARM aarch64, statically linked`
-- arm64 交付产物本机真实跑 A2 smoke：PASS 9/9（点阵/百分比/倒计时/轮询状态/退出码）
+- arm64 交付产物在目标机真实跑 A2 smoke：PASS 9/9（点阵/百分比/倒计时/轮询状态/退出码）
 
 ## 2026-09-25 · M4 验收核对（A1–A4 对照 AGENTS.md）
 
@@ -122,5 +122,5 @@ ok  	with-linux/internal/app	0.093s
 - 命令名 `wl`（`cmd/wl/` 结构）；标题改「With Linux」、状态栏按键提示大写（`Q`/`R`，`Q` 退出行为同步支持）；`TASK_PLAN.md`→`PLAN.md`；README 精简。
 - 验证：`go test ./...` 全绿（q/Q 双退出键）、A2 smoke PASS 7/7（帧实证新标题与提示）。
 - 仓库 https://github.com/Lifeni/with-linux（公开，MIT，GitHub 已识别）；Release v0.1.0 附 `with-linux-linux-{amd64,arm64}` 两个全静态产物。
-- 安装了 `gh` 2.23.0（华为云 Debian 镜像源，官方源下载超时）；gh 登录为 Lifeni（设备码流程由用户完成）。
+- 安装了 `gh` 2.23.0；并完成 GitHub 登录（设备码流程由用户完成）。
 - `usage-tui.js`（旧实现参考）与 `config.json` 不入库。

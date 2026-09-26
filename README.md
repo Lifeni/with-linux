@@ -1,6 +1,6 @@
 # with-linux
 
-个人自用的 Linux 终端工具箱（TUI）：arm64 开发板、SSH 使用、按需启动。命令名 **`wl`**。
+个人自用的 Linux 终端工具箱（TUI）：面向 arm64/amd64，SSH 使用、按需启动。命令名 **`wl`**。
 当前版本 v0.1.1，首个工具是「OpenCode Go 用量查询」。
 
 ## 功能
