@@ -1,13 +1,18 @@
 # with-linux
 
+[![Release](https://img.shields.io/github/v/release/Lifeni/with-linux)](https://github.com/Lifeni/with-linux/releases)
+[![License](https://img.shields.io/github/license/Lifeni/with-linux)](LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/Lifeni/with-linux)](go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Lifeni/with-linux.svg)](https://pkg.go.dev/github.com/Lifeni/with-linux)
+
 个人自用的 Linux 终端工具箱（TUI）：面向 arm64/amd64，SSH 使用、按需启动。命令名 **`wl`**。
-当前版本 v0.1.1，首个工具是「OpenCode Go 用量查询」。
 
 ## 功能
 
-- **OpenCode Go 用量查询**：三列点阵进度（rolling / weekly / monthly）＋ 各窗口重置倒计时
-- 60s 自动轮询、失败重试；401 / 403 / 网络失败有明确错误提示
-- 键盘优先、鼠标可用（点击 tab、滚轮滚动）
+- OpenCode Go 用量查询：三列点阵进度与重置倒计时
+- 60 秒自动轮询，失败自动重试
+- 401 / 403 / 网络失败有明确提示
+- 键盘优先，鼠标可用
 
 ## 安装
 
@@ -26,15 +31,6 @@ go build -o wl ./cmd/wl
 ```
 
 配置缺失时面板会提示期望的路径，不会崩溃。
-
-## 操作
-
-| 操作 | 键盘 | 鼠标 |
-|------|------|------|
-| 退出 | `Q` / `Esc` / `Ctrl+C` | — |
-| 切换工具 | `←` `→` / `Tab` / `1`–`9` | 点击顶部 tab |
-| 滚动 | `↑` `↓` / `PgUp` `PgDn` | 滚轮 |
-| 刷新 | `R` | — |
 
 设计与开发文档见 [AGENTS.md](AGENTS.md)、[PLAN.md](PLAN.md)、[CHANGELOG.md](CHANGELOG.md)。
 

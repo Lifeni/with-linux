@@ -208,7 +208,7 @@ func (m Model) renderTabBar() string {
 
 // renderStatus 渲染最后一行：左「当前工具 · 快捷键提示」，右「加载/错误状态」。
 func (m Model) renderStatus() string {
-	left := " " + m.toolNames[m.active] + " · Q 退出 · ←→ 切换工具 · ↑↓/滚轮 滚动 · R 刷新"
+	left := " " + m.toolNames[m.active] + " · Q 退出 · R 刷新"
 	rightS, sev := m.usage.StatusText()
 	var right string
 	switch sev {

@@ -147,3 +147,14 @@ ok  	with-linux/internal/app	0.093s
 - [x] 删除旧包名产物 `dist/wl_0.1.1_arm64.deb`、`dist/wl_0.1.2-dev_arm64.deb`，避免手滑 `apt install` 重蹈覆辙。
 - [x] `~/.bashrc` 增 `export PATH="$HOME/go/bin:$PATH"`（改前备份 `~/.backups/shell-20260927/.bashrc.bak-20260927`）；新 shell 验证 `command -v wl` → `/usr/bin/wl`、`wl --version` → `wl 0.1.2-dev`，`PATH` 含 `/home/you/go/bin`。
 - 注意：`~/go/bin` 在 PATH 中前置，若日后 `go install .../cmd/wl`，`~/go/bin/wl` 会遮蔽 deb 版。
+
+## 2026-09-27 · 状态栏提示精简 ＋ README 改版（用户指令）
+
+- 底部状态栏左侧提示去掉「←→ 切换工具 · ↑↓/滚轮 滚动」，只留有快捷键的「Q 退出 · R 刷新」（切换/滚动靠鼠标直操，不必占位提示）。`internal/app/app.go:211`。
+- README 改版：加 4 个 badge（Release / License / Go Version / Go Reference）；开头简介只说定位、不再列功能与版本；功能拆成单行列表项、去掉解释；删掉「操作」整节。
+
+### 验证 8：状态栏与 README — PASS
+
+- `go test -count=1 ./...` 全绿（未动断言）。
+- 重打包 `dist/with-linux_0.1.2-dev_arm64.deb` 并 `apt install --reinstall`（`Setting up with-linux (0.1.2-dev)`；`wl --version` → `wl 0.1.2-dev`）。
+- pty 实测：`Q 退出` ✓ `R 刷新` ✓；`切换工具` ✗ `滚动` ✗ `←→` ✗ `↑↓` ✗ 均不再出现；退出码 0。
