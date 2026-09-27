@@ -3,7 +3,10 @@
 set -euo pipefail
 ARCH="${1:-$(dpkg --print-architecture)}"
 VERSION="${VERSION:-dev}"
-PKG="wl"
+# 包名用 with-linux，不用 wl：发行版源里已有同名包 wl（Emacs Wanderlust），
+# 版本号更低会被 unattended-upgrade 当成旧版覆盖，导致 wl 命令消失。
+# 命令名仍由下面 install 到 /usr/bin/wl 决定。
+PKG="with-linux"
 BIN="wl-linux-$ARCH"
 DEST="dist/pkg/$BIN"
 

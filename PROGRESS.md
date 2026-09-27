@@ -124,3 +124,26 @@ ok  	with-linux/internal/app	0.093s
 - 仓库 https://github.com/Lifeni/with-linux（公开，MIT，GitHub 已识别）；Release v0.1.0 附 `with-linux-linux-{amd64,arm64}` 两个全静态产物。
 - 安装了 `gh` 2.23.0；并完成 GitHub 登录（设备码流程由用户完成）。
 - `usage-tui.js`（旧实现参考）与 `config.json` 不入库。
+
+## 2026-09-27 · 修复 `wl` 命令消失（deb 包名撞车）
+
+- 现象：`wl` → command not found。
+- 根因：本地打的 deb 包名是 `wl`（v0.1.2-dev），与 Debian 源里的 `wl`（Emacs Wanderlust，`2.15.9+0.20210131-2`）撞名；dpkg 认为 `2.15.9…` > `0.1.2-dev`，`unattended-upgrade` 于 **2026-09-27 06:54:34** 把它当旧版覆盖成 Wanderlust，而后者不含 `/usr/bin/wl`，命令随之消失。
+  - 证据：`/var/log/apt/history.log` → `Commandline: /usr/bin/unattended-upgrade` / `Upgrade: wl:arm64 (0.1.2-dev, 2.15.9+0.20210131-2)`；`/var/log/dpkg.log` 同刻 `upgrade wl:arm64 0.1.2-dev 2.15.9+…`；`dpkg -L wl` 中 `usr/bin` 下 0 个文件。
+- 修复：deb 包名 `wl` → `with-linux`（`scripts/mkdeb.sh` 的 `PKG`、`.goreleaser.yaml` 的 `nfpms[].package_name`），**命令名仍为 `wl`**（仍装到 `/usr/bin/wl`）。
+
+### 验证 7：修复后实测 — PASS
+
+- 构建：`VERSION=0.1.2-dev bash scripts/mkdeb.sh arm64` → `dist/with-linux_0.1.2-dev_arm64.deb`，`Package: with-linux`，内含 `./usr/bin/wl`。
+- 安装：`sudo apt install ./dist/with-linux_0.1.2-dev_arm64.deb` → `Setting up with-linux (0.1.2-dev)`。
+- `command -v wl` → `/usr/bin/wl`；`dpkg -S /usr/bin/wl` → `with-linux: /usr/bin/wl`；`wl --version` → `wl 0.1.2-dev`。
+- `dpkg -l` 两个包并存互不干扰：`with-linux 0.1.2-dev arm64` ＋ `wl 2.15.9+… all`。
+- `apt-get -s upgrade` / `apt list --upgradable` → 计划中无 `with-linux`（源里没有此包，不会再被自动升级覆盖）。
+- pty 真实启动：渲染出 `With Linux` / `OpenCode Go` / `退出` / `刷新`，按 `q` 退出码 **0**。
+- `go test ./...` 全绿（app、usage；仅改打包脚本与 release 配置，未动 Go 代码）。
+
+### 收尾（2026-09-27，用户确认）
+
+- [x] 删除旧包名产物 `dist/wl_0.1.1_arm64.deb`、`dist/wl_0.1.2-dev_arm64.deb`，避免手滑 `apt install` 重蹈覆辙。
+- [x] `~/.bashrc` 增 `export PATH="$HOME/go/bin:$PATH"`（改前备份 `~/.backups/shell-20260927/.bashrc.bak-20260927`）；新 shell 验证 `command -v wl` → `/usr/bin/wl`、`wl --version` → `wl 0.1.2-dev`，`PATH` 含 `/home/you/go/bin`。
+- 注意：`~/go/bin` 在 PATH 中前置，若日后 `go install .../cmd/wl`，`~/go/bin/wl` 会遮蔽 deb 版。

@@ -28,7 +28,8 @@ archives:
     name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
 
 nfpms:
-  - package_name: wl
+  # 包名不能用 wl：会与发行版源的 wl（Emacs Wanderlust）撞名，被自动升级覆盖。
+  - package_name: with-linux
     vendor: Lifeni
     homepage: https://github.com/Lifeni/with-linux
     maintainer: Lifeni <liangfengning@foxmail.com>
