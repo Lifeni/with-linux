@@ -304,3 +304,19 @@ ok  	with-linux/internal/app	0.093s
 
 - 当前工作树已不再包含已知旧 key 搜索片段；`git grep` 对这两个具体片段无命中。
 - `git log --all -S...` 证明旧片段仍存在于历史提交 `dcf866e` 的 `PROGRESS.md`。删除当前行不能清除远端历史。**必须轮换对应 API Key**；是否用 `git filter-repo` 重写历史并 force-push 需用户另行确认，本次未执行破坏性 Git 操作。
+
+## 2026-09-28 · 发布 v0.2.1（用户指令）
+
+- 版本决策：`0.2.0 → 0.2.1`。本次是可靠性修复、CLI 帮助与 CI 完善，没有新增功能，按语义化版本发补丁版。
+- 提交：`8f16a91 fix: 修复用量刷新与配置错误处理`；`6e13b12 docs: 发布 v0.2.1`。`main` 已推送到 `6e13b12`。
+- 用户已确认轮换密钥。旧 key 片段仍存在于历史提交 `dcf866e`；本次未重写 Git 历史，也未执行 force-push。
+
+### 验证 18：v0.2.1 发版全链路 — PASS
+
+- push CI run **36417248873** → `completed / success`。格式、`go mod tidy` 无 diff、`go vet`、单测、race、`linux/amd64` ＋ `linux/arm64` 构建全部通过。
+- `git tag -a v0.2.1 -m "v0.2.1"` ＋ `git push origin v0.2.1`；Release workflow run **36417509467** → `completed / success`（47s）。
+- Release：https://github.com/Lifeni/with-linux/releases/tag/v0.2.1（`draft: false`、`prerelease: false`）。产物齐全：`with-linux-linux-{amd64,arm64}.tar.gz`、`with-linux_0.2.1_{amd64,arm64}.deb`、`with-linux_0.2.1_{amd64,arm64}.rpm`、`checksums.txt`。
+- 下载 arm64 deb 与 `checksums.txt`：deb sha256 `674f3e92677c6f6e5f00535f42444f849cbb6efedb5203eca165da4a451da8e6`，与 Release 校验文件一致；`dpkg-deb --info` 显示 `Package: with-linux`、`Version: 0.2.1`、`Architecture: arm64`。
+- 用 Release 产物执行 `sudo apt install --reinstall`：`Unpacking with-linux (0.2.1) over (0.2.1~dev)` / `Setting up with-linux (0.2.1)`；`/usr/bin/wl --version` → `wl 0.2.1`；`--help` 正常；`dpkg -V with-linux` 无输出；`sha256sum /usr/bin/wl` → `360ca0f65f329655f55265c02e0b25459627afa0dfb6bb8cc0fb52c0c3d01815`。
+- 对已安装的 `/usr/bin/wl` 运行 PTY 冒烟：**27/27 PASS**；「关于」显示 `版本 0.2.1`、`构建日期 2026-09-28`、`提交 6e13b12`、`Go go1.27.1`、`平台 linux/arm64`。冒烟使用 `/tmp/wl-smoke/with-linux/config.json`，未读取真实配置。
+- Release workflow 仍有 Node.js 20 弃用告警（`checkout@v4` / `setup-go@v5` / `goreleaser-action@v6` 被强制运行在 Node 24），不影响本次产物与验证结果。
