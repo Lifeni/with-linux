@@ -197,3 +197,13 @@ ok  	with-linux/internal/app	0.093s
 - `sudo apt install --reinstall ./dist/with-linux_0.1.2-dev_arm64.deb` → `Setting up with-linux (0.1.2-dev)`；`dpkg -s` → `install ok installed`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.1.2-dev`；`sha256sum /usr/bin/wl` == `dist/pkg/wl-linux-arm64`（`d7d9f13e…`）；`dpkg -V` 无差异。
 - **对装好的 `/usr/bin/wl` 重跑同一 pty 冒烟：27/27 PASS**；「关于」显示 `0.1.2-dev / 2026-09-28 / 4d690b1-dirty`（`-dirty` 属实：本次改动尚未提交，`mkdeb.sh` 从 git 取哈希并标脏）。
 - 遗留：提交后重打包即可把 `-dirty` 变纯哈希；实机鼠标点击（用户侧）仍未验。
+
+### 验证 12：提交 ＋ 自动装到本机（新工作流） — PASS
+
+- **提交前敏感信息扫描抓到两处泄露并已清理**：`internal/settings/settings_test.go` 的测试 key 直接抄了真实 key 的前 30 个字符、`AGENTS.md` 的掩码示例抄了真实 key 的后 4 个字符。已改成明显假值（`oc_sk_fake_key_for_tests_0123`、掩码示例 `oc_sk_aa…zz99`），并在章程「设置页 · Key 显示」补一句「文档/代码示例一律用明显假值」。
+- `git log --all -S'6079fabe'` / `-S'rpCm5ple'` 无历史命中；提交后 `git grep` 复扫无命中；另把 `PROGRESS.md` 里残留的 `/home/you/go/bin` 改成 `~/go/bin`（`/with-linux` 等构建产物本就在 `.gitignore`，`config.json`、`usage-tui.js` 也在）。
+- **工作流新增两条**（用户 2026-09-28 要求，写进 `AGENTS.md §3`）：**8. 改完自动装到本机**（`mkdeb.sh` ＋ `apt install --reinstall`，并对**已安装的** `/usr/bin/wl` 复验）、**9. 提交前扫敏感信息**。
+- 提交：`396fc1c feat: 设置页 —— 编辑 API Key 写回配置 ＋ 关于构建信息（A5）`，工作区干净。
+- 自动安装：`VERSION=0.1.2-dev bash scripts/mkdeb.sh arm64` → `sudo apt install --reinstall` → `Setting up with-linux (0.1.2-dev)`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.1.2-dev`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`6f765c45…`）；`dpkg -V` 无差异。
+- 装后对 `/usr/bin/wl` 跑 pty 冒烟：**27/27 PASS**；「关于」显示 `版本 0.1.2-dev / 构建日期 2026-09-28 / 提交 396fc1c`（干净哈希，已无 `-dirty`）。
+- 真实配置未被触碰：`~/.config/with-linux/config.json` 仍为 2026-09-25 21:58，md5 `fb8132d2…`。
