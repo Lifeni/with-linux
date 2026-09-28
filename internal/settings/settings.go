@@ -55,11 +55,8 @@ const (
 // gutterW 是可编辑行的选择标记宽度（"▸ " 或两个空格）。
 const gutterW = 2
 
-// boxChromeW 是线框占用的水平宽度：左右边框各 1 ＋ 左右内边距各 2。
-const boxChromeW = 6
-
-// boxChromeH 是线框占用的垂直高度：上下边框各 1 ＋ 上下内边距各 1（内边距=一个行高）。
-const boxChromeH = 4
+// boxChromeW 是线框占用的水平宽度：左右边框各 1 ＋ 左右内边距各 4。
+const boxChromeW = 10
 
 // tailMaskMin 是掩码时保留头尾的最小长度：短于它就整段掩码。
 const tailMaskMin = 12
@@ -74,7 +71,7 @@ var (
 	stBox     = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("240")).
-			Padding(1, 2)
+			Padding(1, 4)
 )
 
 // Model 是设置页状态。
@@ -141,6 +138,22 @@ func (m Model) StatusText() (text string, severity int) {
 	return "", 0
 }
 
+// ShortStatusText 是窄屏降级用的短状态文案。
+func (m Model) ShortStatusText() string {
+	switch {
+	case m.saveErr != "":
+		return "失败"
+	case m.editing:
+		if m.input.Value() != m.key {
+			return "未保存"
+		}
+		return "编辑中"
+	case m.saved:
+		return "已保存"
+	}
+	return ""
+}
+
 // Update 处理设置页的按键。编辑态由 Editing + 框架转发保证：全局键已让位。
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if m.editing {
@@ -170,10 +183,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// ClickLine 处理内容区第 line 行（0 起、已含滚动偏移）的鼠标点击：点在可编辑行上即进入编辑。
-// height 是内容区高度（整框垂直居中，行号随高度变）。
-func (m Model) ClickLine(line, height int) Model {
-	if m.editing || line != apiKeyLine(height) {
+// ClickLine 处理内容区第 line 行（0 起、自然高度里的行号）的鼠标点击：
+// 点在可编辑行上即进入编辑。框架负责把终端行换算成这里的行号（含滚动与居中偏移）。
+func (m Model) ClickLine(line int) Model {
+	if m.editing || line != apiKeyLine {
 		return m
 	}
 	nm, _ := m.beginEdit()
@@ -280,34 +293,18 @@ func (m Model) innerLines(width int) []string {
 	}
 }
 
-// boxTop 是线框在内容区里的起始行（垂直居中；内容比区域高时贴顶）。
-func boxTop(height int) int {
-	t := (height - (innerRows + boxChromeH)) / 2
-	if t < 0 {
-		t = 0
-	}
-	return t
-}
-
-// apiKeyLine 是内容区里 API Key 行的行号（整框垂直居中，故与高度有关）。
-// +2 = 上边框 + 上内边距（各 1 行）。
-func apiKeyLine(height int) int { return boxTop(height) + 2 + innerAPIKey }
-
-// Lines 渲染设置页：内容用线框框起来，整体在 width×height 里水平、垂直居中，恰好 height 行。
-func (m Model) Lines(width, height int) []string {
+// Lines 渲染设置页内容：线框内的表单，**自然高度**（不裁剪、不垂直居中）。
+// 水平居中在这里做；垂直居中与滚动由框架负责（内容不足一屏居中，超出一屏可滚）。
+func (m Model) Lines(width int) []string {
 	box := stBox.Render(strings.Join(m.innerLines(width), "\n"))
-	if lipgloss.Width(box) > width {
+	if width > 0 && lipgloss.Width(box) > width {
 		// 窄终端：先截到终端宽度，避免折行
 		box = lipgloss.NewStyle().MaxWidth(width).Render(box)
 	}
-	placed := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
-
-	lines := strings.Split(placed, "\n")
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return lines
+	box = lipgloss.PlaceHorizontal(width, lipgloss.Center, box)
+	return strings.Split(box, "\n")
 }
+
+// apiKeyLine 是内容区（自然高度、行号自 0 起）里 API Key 行的行号：
+// 上边框 + 上内边距 + 框内行。鼠标命中用它，恒为常量。
+const apiKeyLine = 2 + innerAPIKey

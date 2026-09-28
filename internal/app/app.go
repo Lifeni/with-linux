@@ -79,6 +79,7 @@ func (m Model) viewHeight() int {
 }
 
 // contentLines 是当前工具内容区的逐行内容。
+// 用量页是图表：按可用高度铺满；设置页是表单：返回自然高度，由框架居中/滚动。
 func (m Model) contentLines() []string {
 	if m.contentOverride != nil {
 		return m.contentOverride()
@@ -87,10 +88,24 @@ func (m Model) contentLines() []string {
 	case tabUsage:
 		return m.usage.Lines(m.width, m.viewHeight())
 	case tabSettings:
-		return m.settings.Lines(m.width, m.viewHeight())
+		return m.settings.Lines(m.width)
 	}
 	return nil
 }
+
+// contentOffset 是内容在一屏里的起始行：内容不足一屏时垂直居中，超出一屏时从 0 起滚动。
+func (m Model) contentOffset() int {
+	n := len(m.contentLines())
+	vh := m.viewHeight()
+	if n >= vh {
+		return 0
+	}
+	return (vh - n) / 2
+}
+
+// contentStart 是内容区第 0 行对应的内容行号（可能为负：内容不足一屏时上方补空行）。
+// 渲染与鼠标命中都用它，保证两边一致。
+func (m Model) contentStart() int { return m.scroll - m.contentOffset() }
 
 // maxScroll 是当前工具内容的最大滚动偏移。
 func (m Model) maxScroll() int {
@@ -99,6 +114,77 @@ func (m Model) maxScroll() int {
 		n = 0
 	}
 	return n
+}
+
+// clampStyled 把已带样式的字符串截到 width 个可见格（width<=0 时不截）。
+func clampStyled(s string, width int) string {
+	if width <= 0 || lipgloss.Width(s) <= width {
+		return s
+	}
+	return lipgloss.NewStyle().MaxWidth(width).Render(s)
+}
+
+// shortName 是窄屏降级用的短名：取最后一个空格之后的部分；没有空格就截到 4 格。
+func (m Model) shortName(i int) string {
+	n := m.toolNames[i]
+	if j := strings.LastIndex(n, " "); j >= 0 && j+1 < len(n) {
+		if s := n[j+1:]; runewidth.StringWidth(s) > 0 {
+			return s
+		}
+	}
+	return runewidth.Truncate(n, 4, "…")
+}
+
+// tabPlan 是当前宽度下 tab 栏的渲染方案。renderTabBar 与 tabLayoutFor 共用同一份计算，
+// 保证「画出来的」和「点得到的」永远一致。
+type tabPlan struct {
+	title  bool     // 是否显示程序名
+	labels []string // 每个 tab 的可见文本（空串 = 该 tab 被折叠）
+}
+
+// planWidth 是方案渲染后的可见宽度（行首 1 空格 + 程序名 + 各标签）。
+func (p tabPlan) planWidth() int {
+	w := 1
+	if p.title {
+		w += runewidth.StringWidth(title + "   ")
+	}
+	for _, l := range p.labels {
+		w += runewidth.StringWidth(l)
+	}
+	return w
+}
+
+// tabPlanFor 按宽度逐级降级：全名 → 短名 → 去程序名 → 只留当前 tab ＋ …。
+func (m Model) tabPlanFor() tabPlan {
+	build := func(withTitle, short, onlyActive bool) tabPlan {
+		p := tabPlan{title: withTitle, labels: make([]string, len(m.toolNames))}
+		for i := range m.toolNames {
+			if onlyActive && i != m.active {
+				continue // 折叠：标签留空
+			}
+			name := m.toolNames[i]
+			if short {
+				name = m.shortName(i)
+			}
+			p.labels[i] = tabLabel(name)
+		}
+		if onlyActive {
+			p.labels[m.active] = tabLabel(m.shortName(m.active)) + "…"
+		}
+		return p
+	}
+	cands := []tabPlan{
+		build(true, false, false),
+		build(true, true, false),
+		build(false, true, false),
+		build(false, true, true),
+	}
+	for _, p := range cands {
+		if p.planWidth() <= m.width {
+			return p
+		}
+	}
+	return cands[len(cands)-1] // 仍放不下：由 renderTabBar 截断
 }
 
 func clamp(v, lo, hi int) int {
@@ -115,13 +201,17 @@ func clamp(v, lo, hi int) int {
 func tabLabel(name string) string { return " [" + name + "] " }
 
 // tabLayoutFor 按工具名计算每个 tab 的可见列区间。纯函数：同一宽度结果恒定，
-// Update 里做鼠标命中测试与 View 渲染共用同一份计算。
+// Update 里做鼠标命中测试与 View 渲染共用同一份计算（含窄屏降级方案）。
 func (m Model) tabLayoutFor() []tabSpan {
-	spans := make([]tabSpan, 0, len(m.toolNames))
-	x := runewidth.StringWidth(" " + title + "   ")
-	for _, name := range m.toolNames {
-		w := runewidth.StringWidth(tabLabel(name))
-		spans = append(spans, tabSpan{start: x, end: x + w})
+	p := m.tabPlanFor()
+	spans := make([]tabSpan, len(m.toolNames))
+	x := 1
+	if p.title {
+		x += runewidth.StringWidth(title + "   ")
+	}
+	for i, name := range p.labels {
+		w := runewidth.StringWidth(name)
+		spans[i] = tabSpan{start: x, end: x + w}
 		x += w
 	}
 	return spans
@@ -175,8 +265,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.activate(idx), nil
 			}
 			return m, nil
+		case s == "pgup":
+			m.scroll -= m.viewHeight()
+		case s == "pgdown" || s == "pgdn": // v2 键名是 pgdown；pgdn 是旧写法
+			m.scroll += m.viewHeight()
 		case m.active == tabSettings:
-			// 设置页自己管 ↑↓/Enter（不当成滚动）
+			// 设置页自己管 ↑↓/Enter（不当成滚动）；PgUp/PgDn 已在上面处理为滚动
 			sm, cmd := m.settings.Update(msg)
 			m.settings = sm
 			return m, cmd
@@ -184,10 +278,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll--
 		case s == "down":
 			m.scroll++
-		case s == "pgup":
-			m.scroll -= m.viewHeight()
-		case s == "pgdn":
-			m.scroll += m.viewHeight()
 		default:
 			// 其他按键（如用量页的 R 刷新）转发给用量工具
 			um, cmd := m.usage.Update(msg)
@@ -209,7 +299,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// 内容区点击：设置页点可编辑行直接进入编辑
 		if m.active == tabSettings && msg.Y >= 1 && msg.Y <= m.height-2 {
-			m.settings = m.settings.ClickLine(m.scroll+msg.Y-1, m.viewHeight())
+			m.settings = m.settings.ClickLine(m.contentStart() + msg.Y - 1)
 			return m, nil
 		}
 
@@ -234,21 +324,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(uc, sc)
 }
 
-// renderTabBar 渲染第 0 行：程序名 + 工具标签（选中高亮）。
+// renderTabBar 渲染第 0 行：程序名 + 工具标签（选中高亮）。窄屏逐级降级，永不折行。
 func (m Model) renderTabBar() string {
+	p := m.tabPlanFor()
 	var b strings.Builder
 	b.WriteString(" ")
-	b.WriteString(styleTitle.Render(title))
-	b.WriteString("   ")
-	for i, name := range m.toolNames {
-		label := tabLabel(name)
+	if p.title {
+		b.WriteString(styleTitle.Render(title))
+		b.WriteString("   ")
+	}
+	for i, label := range p.labels {
+		if label == "" {
+			continue
+		}
 		if i == m.active {
 			b.WriteString(styleTabActive.Render(label))
 		} else {
 			b.WriteString(styleTabIdle.Render(label))
 		}
 	}
-	return b.String()
+	return clampStyled(b.String(), m.width)
 }
 
 // stateHints 是状态栏左侧的快捷键提示（随标签变）。
@@ -267,10 +362,39 @@ func (m Model) stateRight() (string, int) {
 	return m.usage.StatusText()
 }
 
+// stateRightShort 是窄屏降级用的短状态。
+func (m Model) stateRightShort() string {
+	if m.active == tabSettings {
+		return m.settings.ShortStatusText()
+	}
+	return m.usage.ShortStatusText()
+}
+
 // renderStatus 渲染最后一行：左「当前工具 · 快捷键提示」，右「加载/错误状态」。
+// 窄屏逐级降级（短名/短提示/短状态 → 只留状态），任何宽度下都不折行。
 func (m Model) renderStatus() string {
-	left := " " + m.toolNames[m.active] + " · " + m.stateHints()
-	rightS, sev := m.stateRight()
+	fullStatus, sev := m.stateRight()
+	shortStatus := m.stateRightShort()
+	hints := m.stateHints()
+
+	type pair struct{ left, right string }
+	cands := []pair{
+		{m.toolNames[m.active] + " · " + hints, fullStatus},
+		{m.toolNames[m.active] + " · Q 退出", shortStatus},
+		{m.shortName(m.active) + " · Q 退出", shortStatus},
+		{m.shortName(m.active), shortStatus},
+		{"", shortStatus},
+	}
+	chosen := cands[len(cands)-1]
+	for _, c := range cands {
+		if runewidth.StringWidth(c.left)+runewidth.StringWidth(c.right) <= m.width-1 {
+			chosen = c
+			break
+		}
+	}
+
+	left := " " + chosen.left
+	rightS := chosen.right
 	var right string
 	switch sev {
 	case 2:
@@ -284,17 +408,18 @@ func (m Model) renderStatus() string {
 	if gap < 1 {
 		gap = 1
 	}
-	return styleStatus.Render(left) + strings.Repeat(" ", gap) + right
+	return clampStyled(styleStatus.Render(left)+strings.Repeat(" ", gap)+right, m.width)
 }
 
-// render 组装三段式界面：tab 栏 / 内容区（恰好 viewHeight 行）/ 状态提示。
+// render 组装三段式界面：tab 栏 / 内容区（恰好 viewHeight 行，含居中和滚动）/ 状态提示。
 func (m Model) render() string {
 	vh := m.viewHeight()
 	lines := m.contentLines()
+	start := m.contentStart()
 	body := make([]string, 0, vh)
 	for i := 0; i < vh; i++ {
-		if i < len(lines) {
-			body = append(body, lines[i])
+		if j := start + i; j >= 0 && j < len(lines) {
+			body = append(body, lines[j])
 		} else {
 			body = append(body, "")
 		}

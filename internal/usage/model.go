@@ -3,6 +3,7 @@ package usage
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -129,6 +130,45 @@ func ErrorText(code string) string {
 	default:
 		return "请求失败：" + code
 	}
+}
+
+// ShortStatusText 是窄屏降级用的短状态：只给码或秒数，不带文案。
+func (m Model) ShortStatusText() string {
+	if !m.hasKey {
+		return "未配置"
+	}
+	if m.lastError != "" {
+		return shortError(m.lastError)
+	}
+	if m.fetching {
+		return "查询中"
+	}
+	if m.lastFetchAt.IsZero() {
+		return "待刷新"
+	}
+	secs := int(m.nextFetchAt.Sub(m.now).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	return fmt.Sprintf("%ds", secs)
+}
+
+// shortError 把错误码压到 2–4 格宽。
+func shortError(code string) string {
+	switch code {
+	case ErrKeyInvalid:
+		return "401"
+	case ErrNoSub:
+		return "403"
+	case ErrNetwork:
+		return "网络"
+	case ErrBadResponse:
+		return "格式"
+	}
+	if s, ok := strings.CutPrefix(code, "HTTP_"); ok {
+		return s
+	}
+	return code
 }
 
 // StatusText 是底部状态提示右侧的文本（FINDINGS.md §1.2）。
