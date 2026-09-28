@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed
+
+- `scripts/mkdeb.sh`：版本号默认取最近 tag ＋ `~dev`（如 `0.2.0~dev`，显式 `VERSION` 仍可覆盖）；`~` 让本地包排序低于正式版，避免本地包装过之后改回正式版需要 `--allow-downgrades`
+
 ## [0.2.0] - 2026-09-28
 
 ### Added

@@ -2,7 +2,16 @@
 # 本地构建 .deb（无 goreleaser 依赖）。用法：bash scripts/mkdeb.sh [goarch]
 set -euo pipefail
 ARCH="${1:-$(dpkg --print-architecture)}"
-VERSION="${VERSION:-dev}"
+# 版本号：显式 VERSION 优先；否则取最近 tag ＋ ~dev。
+# `~` 让本地包排序**低于**正式版（dpkg: 0.2.0~dev < 0.2.0），
+# 免得本地包装过之后改回正式版还要 --allow-downgrades。
+if [ -z "${VERSION:-}" ]; then
+  if tag=$(git describe --tags --abbrev=0 2>/dev/null) && [ -n "$tag" ]; then
+    VERSION="${tag#v}~dev"
+  else
+    VERSION=dev
+  fi
+fi
 # 注入构建信息（「关于」区块展示）；拿不到就留空，由程序回退 Go 构建信息。
 COMMIT="${COMMIT:-$(git rev-parse --short=7 HEAD 2>/dev/null || echo "")}"
 if [ -n "$COMMIT" ] && ! git diff --quiet 2>/dev/null; then

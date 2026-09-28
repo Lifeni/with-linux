@@ -266,3 +266,13 @@ ok  	with-linux/internal/app	0.093s
 - 装后实测 `/usr/bin/wl`：pty 冒烟 **27/27 PASS**（「关于」显示 `版本 0.2.0` / `构建日期 2026-09-28` / `提交 f805466`）；tmux 100×26 设置页线框与点阵居中正常；30×12 顶栏降级 `[用量] [设置]`、状态栏双侧保留、设置页 `PgDn` 可滚到底。
 - 真实配置未被触碰：`~/.config/with-linux/config.json` 仍 2026-09-25 21:58，md5 `fb8132d2…`。
 - 备注：本地 `0.1.2-dev` 的 deb 已被 0.2.0 覆盖；以后本地迭代仍用 `VERSION=... bash scripts/mkdeb.sh`，正式发布一律走 tag ＋ CI。
+
+## 2026-09-28 · 收尾清理（用户指令）
+
+- **删掉仓库根目录的旧二进制 `./with-linux`**（2026-09-25 19:04，5.4MB，`.gitignore` 里，从未入库）：`go version -m` 显示 `path with-linux / mod with-linux (devel)`——是**改模块路径之前**的 v0.1.0 期本地构建，与已装的 `/usr/bin/wl`（0.2.0）内容不同（sha256 `40a43c86…` vs `a3d7138f…`）。留着只会让人手滑跑到旧版，删掉；代码都在 git 里。
+- **`scripts/mkdeb.sh` 版本号默认值改进**：`VERSION` 未显式给时，取 `git describe --tags --abbrev=0` 的最近 tag ＋ `~dev`（拿不到 tag 才回退 `dev`）。
+  - 用 `~` 而不是 `-dev` 的原因：Debian 版本比较里 `~` 排序**低于**正式版 ⇒ 本地包装过之后，改回正式版**不需要** `--allow-downgrades`。
+  - 实测：`bash scripts/mkdeb.sh arm64`（不给 VERSION）→ `Package: with-linux`、`Version: 0.2.0~dev`；`dpkg --compare-versions 0.2.0~dev lt 0.2.0` ✓、`gt 0.1.1` ✓；`VERSION=9.9.9-test` 仍能覆盖 ✓。
+- **清 dist 里的旧产物**：删 `with-linux_0.1.2-dev_arm64.deb`（被 0.2.0 取代）与验证用的 `with-linux_9.9.9-test_arm64.deb`；保留当前树的 `with-linux_0.2.0~dev_arm64.deb`。
+- **本次没有重装**：这轮只改了打包脚本和文档，**二进制与已装的发布版 0.2.0 完全一致**（当前 HEAD `e337b41` 相对 tag `f805466` 只多了 docs/scripts 提交），所以按「改完自动装」的精神说明：装了也没有可测的新东西，保留发布版 0.2.0；要装 `dist/with-linux_0.2.0~dev_arm64.deb` 随时可装（版本号显示 `wl 0.2.0~dev`）。
+- 本机状态：`wl --version` → `wl 0.2.0`（发布产物装的），`dpkg -V` 无差异。
