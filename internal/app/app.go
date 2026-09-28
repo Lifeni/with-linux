@@ -209,7 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// 内容区点击：设置页点可编辑行直接进入编辑
 		if m.active == tabSettings && msg.Y >= 1 && msg.Y <= m.height-2 {
-			m.settings = m.settings.ClickLine(m.scroll + msg.Y - 1)
+			m.settings = m.settings.ClickLine(m.scroll+msg.Y-1, m.viewHeight())
 			return m, nil
 		}
 

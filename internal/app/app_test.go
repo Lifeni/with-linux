@@ -31,10 +31,15 @@ func keyPress(code rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Code: code, Text: string(code)})
 }
 
+// settingsLines 是设置页在当前尺寸下渲染出的内容行（框架视角）。
+func settingsLines(m Model) []string {
+	return m.settings.Lines(m.width, m.viewHeight())
+}
+
 // apiKeyLine 从设置页渲染结果里找出「API Key」行的行号，供鼠标命中测试用。
 func apiKeyLine(t *testing.T, m Model) int {
 	t.Helper()
-	for i, l := range m.settings.Lines(m.width, m.viewHeight()) {
+	for i, l := range settingsLines(m) {
 		if strings.Contains(l, "API Key") {
 			return i
 		}
@@ -213,7 +218,7 @@ func TestSettingsEditingTakesOverGlobalKeys(t *testing.T) {
 	if m.active != tabSettings {
 		t.Fatalf("编辑态输入数字后 active = %d, want %d", m.active, tabSettings)
 	}
-	line := m.settings.Lines(80, 24)[apiKeyLine(t, m)]
+	line := settingsLines(m)[apiKeyLine(t, m)]
 	if !strings.Contains(line, "q1") {
 		t.Fatalf("输入未进入编辑框: %q", line)
 	}
@@ -224,7 +229,7 @@ func TestSettingsEditingTakesOverGlobalKeys(t *testing.T) {
 	if m.settings.Editing() {
 		t.Fatal("Esc 未退出编辑态")
 	}
-	if line := m.settings.Lines(80, 24)[apiKeyLine(t, m)]; strings.Contains(line, "q1") {
+	if line := settingsLines(m)[apiKeyLine(t, m)]; strings.Contains(line, "q1") {
 		t.Fatalf("Esc 未还原输入: %q", line)
 	}
 }

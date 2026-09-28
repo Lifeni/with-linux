@@ -173,7 +173,7 @@ func padEndVis(s string, visW, width int) string {
 // 布局（旧实现 render）：标题行 → 空行 → 生长区 → 空行 → 标签行。
 func (m Model) Lines(width, height int) []string {
 	if !m.hasKey {
-		return m.noKeyLines(width, height)
+		return clampLines(m.noKeyLines(width, height), width)
 	}
 
 	termCols := width
@@ -201,13 +201,26 @@ func (m Model) Lines(width, height int) []string {
 		}
 	}
 	colW := blockW / 2
-	contentW := blockW*3 + gapW*2
-	padL := (inner - contentW) / 2
+	// 每格是「点+空」两个字符，于是每块右端自带一个空格、块间再留 gapW 个空格。
+	// 若按含末尾空格的宽度居中，整块点阵会向右多半格的空位、看起来偏左：
+	// 这里按“墨迹宽度”居中 —— 每块末尾那格空格不计宽，块间距按 gapW+1 个空格（含该空格）。
+	blockGap := gapW + 1
+	inkW := (2*colW-1)*3 + blockGap*2
+	// 三块墨迹宽都是奇数（2*colW-1），所以 inkW 必为奇数：偶数宽终端里左右留白
+	// 不可能同时精确相等。此时把多出的 1 格塞进第一段块间距（而不是右侧留白），
+	// 保证左右留白仍然相等 —— 整组看起来才是居中的。
+	padL := (termCols - inkW) / 2
 	if padL < 0 {
 		padL = 0
 	}
-	lead := strings.Repeat(" ", 1+padL)
-	gap := strings.Repeat(" ", gapW)
+	gapA, gapB := blockGap, blockGap
+	if (termCols-inkW)%2 == 1 {
+		gapA++
+	}
+	lead := strings.Repeat(" ", padL)
+	gap1 := strings.Repeat(" ", gapA)
+	gap2 := strings.Repeat(" ", gapB)
+	labelBlockW := blockW - 1 // 标签行与点阵墨迹同宽，保证上下对齐
 
 	l := rows - 4
 	if l < 1 {
@@ -239,7 +252,13 @@ func (m Model) Lines(width, height int) []string {
 			fh := targetRows(w, h)
 			lit := litRow(k, l-1-y, fh, ramp, colW)
 
-			var b strings.Builder
+			// 先按相邻同状态合并成 run，末尾空格裁掉后再上样式
+			// （每格是「点+空」，整块右端那个空格不算墨迹）
+			type dotRun struct {
+				lit bool
+				txt string
+			}
+			var runs []dotRun
 			runLit := false
 			runLen := 0
 			flush := func() {
@@ -247,12 +266,11 @@ func (m Model) Lines(width, height int) []string {
 					return
 				}
 				ch := dotDim
-				st := stDim
 				if runLit {
 					ch = dotLit
-					st = base
 				}
-				b.WriteString(st.Render(strings.Repeat(ch+" ", runLen)))
+				runs = append(runs, dotRun{lit: runLit, txt: strings.Repeat(ch+" ", runLen)})
+				runLen = 0
 			}
 			for x := 0; x < colW; x++ {
 				isLit := lit[x]
@@ -261,15 +279,30 @@ func (m Model) Lines(width, height int) []string {
 				}
 				if isLit != runLit {
 					flush()
-					runLen = 0
 					runLit = isLit
 				}
 				runLen++
 			}
 			flush()
+			if n := len(runs); n > 0 {
+				if t := strings.TrimSuffix(runs[n-1].txt, " "); t == "" {
+					runs = runs[:n-1]
+				} else {
+					runs[n-1].txt = t
+				}
+			}
+
+			var b strings.Builder
+			for _, r := range runs {
+				st := stDim
+				if r.lit {
+					st = base
+				}
+				b.WriteString(st.Render(r.txt))
+			}
 			segs = append(segs, b.String())
 		}
-		lines = append(lines, lead+strings.Join(segs, gap))
+		lines = append(lines, lead+segs[0]+gap1+segs[1]+gap2+segs[2])
 	}
 	lines = append(lines, "")
 
@@ -329,10 +362,10 @@ func (m Model) Lines(width, height int) []string {
 		}
 	}
 	innerGap := 1
-	if labelW+2+cdW <= blockW {
+	if labelW+2+cdW <= labelBlockW {
 		innerGap = 2
 	}
-	tightGap := blockW - maxBoth
+	tightGap := labelBlockW - maxBoth
 	if tightGap > 2 {
 		tightGap = 2
 	}
@@ -340,13 +373,13 @@ func (m Model) Lines(width, height int) []string {
 		tightGap = 1
 	}
 	lpadOf := func(gw int) int {
-		if gw >= blockW {
+		if gw >= labelBlockW {
 			return 0
 		}
-		return (blockW - gw) / 2
+		return (labelBlockW - gw) / 2
 	}
 	alignedW := labelW + innerGap + cdW
-	useFields := alignedW <= blockW &&
+	useFields := alignedW <= labelBlockW &&
 		(labelW-minL)+innerGap+(cdW-minR) < lpadOf(alignedW)*2+gapW
 
 	groups := make([]string, 0, 3)
@@ -372,10 +405,13 @@ func (m Model) Lines(width, height int) []string {
 	}
 	padded := make([]string, 0, 3)
 	for i, g := range groups {
-		padded = append(padded, padEndVis(strings.Repeat(" ", lpadOf(groupWs[i]))+g, lpadOf(groupWs[i])+groupWs[i], blockW))
+		padded = append(padded, padEndVis(strings.Repeat(" ", lpadOf(groupWs[i]))+g, lpadOf(groupWs[i])+groupWs[i], labelBlockW))
 	}
-	lines = append(lines, lead+strings.Join(padded, gap))
+	lines = append(lines, lead+padded[0]+gap1+padded[1]+gap2+padded[2])
 	lines = append(lines, "") // 底部空行（用户要求，2026-09-25）
+
+	// 兜底：任何一行都不超过终端宽度（超出会被终端折行、破坏三段式布局）
+	lines = clampLines(lines, termCols)
 
 	// 恰好 height 行（矮终端裁剪）
 	if len(lines) > height {
@@ -383,6 +419,16 @@ func (m Model) Lines(width, height int) []string {
 	}
 	for len(lines) < height {
 		lines = append(lines, "")
+	}
+	return lines
+}
+
+// clampLines 把每行截到不超过 width 个可见格（超出会被终端折行、破坏布局）。
+func clampLines(lines []string, width int) []string {
+	for i, l := range lines {
+		if lipgloss.Width(l) > width {
+			lines[i] = lipgloss.NewStyle().MaxWidth(width).Render(l)
+		}
 	}
 	return lines
 }

@@ -50,27 +50,88 @@ func update(m Model, msg tea.Msg) Model {
 // 固定行号常量必须和实际渲染一致（框架的鼠标命中依赖它）。
 func TestLayoutLineMatchesRender(t *testing.T) {
 	m := newTestModel(t, testKey)
-	lines := m.Lines(80, 24)
+	const h = 24
+	lines := m.Lines(80, h)
+	top := boxTop(h)
 
 	for _, tc := range []struct {
-		line  int
+		inner int
 		label string
 	}{
-		{lineTitle, "设置"},
-		{lineAPIKey, labelAPIKey},
-		{lineConfig, labelConfig},
-		{lineSection, labelSection},
-		{lineVersion, labelVersion},
-		{lineDate, labelDate},
-		{lineCommit, labelCommit},
-		{lineGo, labelGo},
-		{linePlatform, labelPlatform},
-		{lineRepo, labelRepo},
+		{innerTitle, "设置"},
+		{innerAPIKey, labelAPIKey},
+		{innerConfig, labelConfig},
+		{innerSection, labelSection},
+		{innerVersion, labelVersion},
+		{innerDate, labelDate},
+		{innerCommit, labelCommit},
+		{innerGo, labelGo},
+		{innerPlatform, labelPlatform},
+		{innerRepo, labelRepo},
 	} {
-		if !strings.Contains(lines[tc.line], tc.label) {
-			t.Fatalf("第 %d 行不含 %q: %q", tc.line, tc.label, lines[tc.line])
+		line := top + 1 + tc.inner // +1 = 上边框
+		if !strings.Contains(lines[line], tc.label) {
+			t.Fatalf("框内第 %d 行（内容区第 %d 行）不含 %q: %q", tc.inner, line, tc.label, lines[line])
 		}
 	}
+	if got := apiKeyLine(h); got != top+1+innerAPIKey {
+		t.Fatalf("apiKeyLine(%d) = %d, want %d", h, got, top+1+innerAPIKey)
+	}
+}
+
+// 线框整体在内容区里水平+垂直居中（用户 2026-09-28 要求）。
+func TestBoxCenteredInContent(t *testing.T) {
+	m := newTestModel(t, testKey)
+	for _, size := range [][2]int{{80, 24}, {64, 20}, {100, 30}, {40, 16}} {
+		w, h := size[0], size[1]
+		lines := m.Lines(w, h)
+		if len(lines) != h {
+			t.Fatalf("Lines(%d,%d) 行数 = %d", w, h, len(lines))
+		}
+
+		top := boxTop(h)
+		if top+innerRows+2 > h {
+			t.Fatalf("Lines(%d,%d) 线框放不下", w, h)
+		}
+		// 垂直居中：上下留白差 ≤1
+		bottom := h - (top + innerRows + 2)
+		if d := top - bottom; d > 1 || d < -1 {
+			t.Fatalf("Lines(%d,%d) 垂直不居中：上 %d 下 %d", w, h, top, bottom)
+		}
+		// 水平居中：线框的左右留白差 ≤1（按上边框那一行量）
+		border := stripANSI(lines[top])
+		border = strings.TrimRight(border, " ")
+		left := len([]rune(border)) - len([]rune(strings.TrimLeft(border, " ")))
+		right := w - left - len([]rune(strings.TrimLeft(border, " ")))
+		if d := left - right; d > 1 || d < -1 {
+			t.Fatalf("Lines(%d,%d) 水平不居中：左 %d 右 %d\n%q", w, h, left, right, border)
+		}
+		// 每行不超宽
+		for _, l := range lines {
+			if got := len([]rune(stripANSI(l))); got > w {
+				t.Fatalf("Lines(%d,%d) 某行宽 %d 超宽: %q", w, h, got, stripANSI(l))
+			}
+		}
+	}
+}
+
+// stripANSI 去掉 SGR 转义，便于按可见文本断言。
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for _, r := range s {
+		switch {
+		case inEsc:
+			if r == 'm' {
+				inEsc = false
+			}
+		case r == 0x1b:
+			inEsc = true
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func TestAboutShowsBuildInfo(t *testing.T) {
@@ -118,7 +179,7 @@ func TestEnterEditsThenEscCancels(t *testing.T) {
 	}
 
 	m = update(m, keyPress('x'))
-	if !strings.Contains(m.Lines(80, 24)[lineAPIKey], "x") {
+	if !strings.Contains(m.Lines(80, 24)[apiKeyLine(24)], "x") {
 		t.Fatal("编辑态输入未显示")
 	}
 
@@ -137,8 +198,8 @@ func TestEnterEditsThenEscCancels(t *testing.T) {
 func TestEnterSavesAndReportsSaved(t *testing.T) {
 	m := newTestModel(t, "")
 
-	if !strings.Contains(m.Lines(80, 24)[lineAPIKey], "(未设置)") {
-		t.Fatalf("空 key 未提示: %q", m.Lines(80, 24)[lineAPIKey])
+	if !strings.Contains(m.Lines(80, 24)[apiKeyLine(24)], "(未设置)") {
+		t.Fatalf("空 key 未提示: %q", m.Lines(80, 24)[apiKeyLine(24)])
 	}
 
 	m = update(m, enter())
@@ -166,8 +227,8 @@ func TestEnterSavesAndReportsSaved(t *testing.T) {
 	if text, sev := m.StatusText(); sev != 0 || text != "已保存" {
 		t.Fatalf("保存后状态栏 = (%q,%d), want 已保存/0", text, sev)
 	}
-	if !strings.Contains(m.Lines(120, 24)[lineAPIKey], maskKey(testKey)) {
-		t.Fatalf("保存后未回到掩码显示: %q", m.Lines(120, 24)[lineAPIKey])
+	if !strings.Contains(m.Lines(120, 24)[apiKeyLine(24)], maskKey(testKey)) {
+		t.Fatalf("保存后未回到掩码显示: %q", m.Lines(120, 24)[apiKeyLine(24)])
 	}
 }
 
@@ -185,8 +246,8 @@ func TestSaveEmptyClearsKey(t *testing.T) {
 	if got := config.Load().APIKey; got != "" {
 		t.Fatalf("清空后配置 key = %q, want 空", got)
 	}
-	if !strings.Contains(m.Lines(80, 24)[lineAPIKey], "(未设置)") {
-		t.Fatalf("清空后未显示未设置: %q", m.Lines(80, 24)[lineAPIKey])
+	if !strings.Contains(m.Lines(80, 24)[apiKeyLine(24)], "(未设置)") {
+		t.Fatalf("清空后未显示未设置: %q", m.Lines(80, 24)[apiKeyLine(24)])
 	}
 }
 
@@ -218,11 +279,12 @@ func TestSaveFailureShowsError(t *testing.T) {
 
 func TestClickLineEntersEditOnlyOnAPIKeyRow(t *testing.T) {
 	m := newTestModel(t, testKey)
+	const h = 24
 
-	if got := m.ClickLine(lineConfig); got.Editing() {
-		t.Fatal("点配置文件行进入了编辑态")
+	if got := m.ClickLine(boxTop(h), h); got.Editing() {
+		t.Fatal("点上边框进入了编辑态")
 	}
-	if got := m.ClickLine(lineAPIKey); !got.Editing() {
+	if got := m.ClickLine(apiKeyLine(h), h); !got.Editing() {
 		t.Fatal("点 API Key 行未进入编辑态")
 	}
 }

@@ -24,18 +24,19 @@ const (
 	editableRows
 )
 
-// 内容区固定行号（自 0 起，与 Lines 的拼装顺序一致；TestLayoutLineMatchesRender 盯着它）。
+// 框内固定行号（自 0 起，与 innerLines 的拼装顺序一致；TestLayoutLineMatchesRender 盯着它）。
 const (
-	lineTitle    = 1
-	lineAPIKey   = 3
-	lineConfig   = 4
-	lineSection  = 6
-	lineVersion  = 7
-	lineDate     = 8
-	lineCommit   = 9
-	lineGo       = 10
-	linePlatform = 11
-	lineRepo     = 12
+	innerTitle    = 0
+	innerAPIKey   = 2
+	innerConfig   = 3
+	innerSection  = 5
+	innerVersion  = 6
+	innerDate     = 7
+	innerCommit   = 8
+	innerGo       = 9
+	innerPlatform = 10
+	innerRepo     = 11
+	innerRows     = 12
 )
 
 // 行标签。
@@ -54,6 +55,9 @@ const (
 // gutterW 是可编辑行的选择标记宽度（"▸ " 或两个空格）。
 const gutterW = 2
 
+// boxChromeW 是线框占用的水平宽度：左右边框各 1 ＋ 左右内边距各 1。
+const boxChromeW = 4
+
 // tailMaskMin 是掩码时保留头尾的最小长度：短于它就整段掩码。
 const tailMaskMin = 12
 
@@ -64,6 +68,10 @@ var (
 	stDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	stSelect  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("68"))
 	stSection = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("36"))
+	stBox     = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 1)
 )
 
 // Model 是设置页状态。
@@ -160,8 +168,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 // ClickLine 处理内容区第 line 行（0 起、已含滚动偏移）的鼠标点击：点在可编辑行上即进入编辑。
-func (m Model) ClickLine(line int) Model {
-	if m.editing || line != lineAPIKey {
+// height 是内容区高度（整框垂直居中，行号随高度变）。
+func (m Model) ClickLine(line, height int) Model {
+	if m.editing || line != apiKeyLine(height) {
 		return m
 	}
 	nm, _ := m.beginEdit()
@@ -212,16 +221,16 @@ func maskKey(key string) string {
 	return string(r[:6]) + "…" + string(r[len(r)-4:])
 }
 
-// Lines 渲染设置页内容，恰好 height 行；行宽不超过 width。
-func (m Model) Lines(width, height int) []string {
+// innerLines 渲染线框内的内容行（不含边框与居中留白），行数恒为 innerRows。
+func (m Model) innerLines(width int) []string {
 	labelW := 0
 	for _, l := range []string{labelAPIKey, labelConfig, labelVersion, labelDate, labelCommit, labelGo, labelPlatform, labelRepo} {
 		if w := runewidth.StringWidth(l); w > labelW {
 			labelW = w
 		}
 	}
-	leadW := 1 // 行首一个空格
-	avail := width - leadW - gutterW - labelW - 2
+	// 每行可用宽度：终端宽 - 线框（边框+内边距） - 选择标记 - 标签列 - 标签与值之间的 2 空格
+	avail := width - boxChromeW - gutterW - labelW - 2
 	if avail < 4 {
 		avail = 4
 	}
@@ -235,10 +244,9 @@ func (m Model) Lines(width, height int) []string {
 		if value == "" {
 			valueS = stDim.Render(v)
 		}
-		return " " + gutter + labelS + strings.Repeat(" ", labelW-runewidth.StringWidth(label)+2) + valueS
+		return gutter + labelS + strings.Repeat(" ", labelW-runewidth.StringWidth(label)+2) + valueS
 	}
 
-	keyValue := maskKey(m.key)
 	var keyLine string
 	if m.editing {
 		in := m.input
@@ -247,29 +255,50 @@ func (m Model) Lines(width, height int) []string {
 		if m.selected == rowAPIKey {
 			gutter = "▸ "
 		}
-		keyLine = " " + gutter + stSelect.Render(labelAPIKey) +
+		keyLine = gutter + stSelect.Render(labelAPIKey) +
 			strings.Repeat(" ", labelW-runewidth.StringWidth(labelAPIKey)+2) + in.View()
 	} else {
-		keyLine = row(labelAPIKey, keyValue, m.selected == rowAPIKey)
+		keyLine = row(labelAPIKey, maskKey(m.key), m.selected == rowAPIKey)
 	}
 
-	lines := []string{
+	return []string{
+		stTitle.Render("设置"), // innerTitle
+		"",                   // 空行
+		keyLine,              // innerAPIKey
+		row(labelConfig, m.configPath, false),
 		"",
-		" " + stTitle.Render("设置"),
-		"",
-		keyLine,                               // lineAPIKey
-		row(labelConfig, m.configPath, false), // lineConfig
-		"",
-		" " + stSection.Render(labelSection), // lineSection
+		stSection.Render(labelSection),
 		row(labelVersion, m.info.Version, false),
 		row(labelDate, m.info.Date, false),
 		row(labelCommit, m.info.Commit, false),
 		row(labelGo, m.info.Go, false),
 		row(labelPlatform, m.info.Platform, false),
 		row(labelRepo, meta.RepoURL, false),
-		"",
 	}
+}
 
+// boxTop 是线框在内容区里的起始行（垂直居中；内容比区域高时贴顶）。
+func boxTop(height int) int {
+	t := (height - (innerRows + 2)) / 2 // +2 = 上下两条边框
+	if t < 0 {
+		t = 0
+	}
+	return t
+}
+
+// apiKeyLine 是内容区里 API Key 行的行号（整框垂直居中，故与高度有关）。
+func apiKeyLine(height int) int { return boxTop(height) + 1 + innerAPIKey }
+
+// Lines 渲染设置页：内容用线框框起来，整体在 width×height 里水平、垂直居中，恰好 height 行。
+func (m Model) Lines(width, height int) []string {
+	box := stBox.Render(strings.Join(m.innerLines(width), "\n"))
+	if lipgloss.Width(box) > width {
+		// 窄终端：先截到终端宽度，避免折行
+		box = lipgloss.NewStyle().MaxWidth(width).Render(box)
+	}
+	placed := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+
+	lines := strings.Split(placed, "\n")
 	if len(lines) > height {
 		lines = lines[:height]
 	}
