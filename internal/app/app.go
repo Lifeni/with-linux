@@ -12,6 +12,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/Lifeni/with-linux/internal/meta"
+	"github.com/Lifeni/with-linux/internal/settings"
 	"github.com/Lifeni/with-linux/internal/usage"
 )
 
@@ -19,6 +21,12 @@ const title = "With Linux"
 
 // tabSpan 是一个 tab 在顶栏的可见列区间 [start,end)，鼠标命中测试用。
 type tabSpan struct{ start, end int }
+
+// 标签索引。框架不约定接口/注册机制（章程），就按索引显式分发。
+const (
+	tabUsage = iota
+	tabSettings
+)
 
 // Model 是 TUI 框架的状态。布局：第 0 行 tab 栏，中间内容区，最后 1 行状态提示。
 type Model struct {
@@ -28,6 +36,7 @@ type Model struct {
 	height    int
 	scroll    int
 	usage     usage.Model
+	settings  settings.Model
 
 	contentOverride func() []string // 仅供测试注入多行内容
 }
@@ -41,14 +50,23 @@ var (
 	styleErr       = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
 )
 
-// New 返回框架模型。v1 只有一个工具；切换逻辑按工具名列表写，不写死"只有一个面板"。
-func New() Model {
+// New 返回框架模型。标签按索引显式分发，不写死"只有一个面板"（章程：余地要留）。
+func New(info meta.Info) Model {
 	return Model{
-		toolNames: []string{"OpenCode Go 用量"},
+		toolNames: []string{"OpenCode Go 用量", "设置"},
 		usage:     usage.New(),
+		settings:  settings.New(info),
 		width:     80,
 		height:    24,
 	}
+}
+
+// activate 切到第 idx 个标签：重置滚动；设置页重读配置并退出编辑态（避免编辑态跨标签残留）。
+func (m Model) activate(idx int) Model {
+	m.active = idx
+	m.scroll = 0
+	m.settings = m.settings.Reload()
+	return m
 }
 
 // viewHeight 是中间内容区的行数（总高减去 tab 行与状态行）。
@@ -66,8 +84,10 @@ func (m Model) contentLines() []string {
 		return m.contentOverride()
 	}
 	switch m.active {
-	case 0:
+	case tabUsage:
 		return m.usage.Lines(m.width, m.viewHeight())
+	case tabSettings:
+		return m.settings.Lines(m.width, m.viewHeight())
 	}
 	return nil
 }
@@ -112,6 +132,23 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// 设置页编辑态：按键与粘贴让位给输入框（Ctrl+C 仍退出整个程序）。
+	if m.active == tabSettings && m.settings.Editing() {
+		if key, ok := msg.(tea.KeyPressMsg); ok {
+			if key.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+			sm, cmd := m.settings.Update(msg)
+			m.settings = sm
+			return m, cmd
+		}
+		if _, ok := msg.(tea.PasteMsg); ok {
+			sm, cmd := m.settings.Update(msg)
+			m.settings = sm
+			return m, cmd
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -119,37 +156,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = clamp(m.scroll, 0, m.maxScroll())
 		return m, nil
 
+	case settings.SavedMsg:
+		// 配置写回成功：让用量工具重读配置并立即取数。
+		um, cmd := m.usage.Update(usage.RefreshMsg{})
+		m.usage = um
+		return m, cmd
+
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "q", "Q", "esc", "ctrl+c":
+		switch s := msg.String(); {
+		case s == "q" || s == "Q" || s == "esc" || s == "ctrl+c":
 			return m, tea.Quit
-		case "left", "shift+tab":
-			m.active = (m.active - 1 + len(m.toolNames)) % len(m.toolNames)
-			m.scroll = 0
+		case s == "left" || s == "shift+tab":
+			return m.activate((m.active - 1 + len(m.toolNames)) % len(m.toolNames)), nil
+		case s == "right" || s == "tab":
+			return m.activate((m.active + 1) % len(m.toolNames)), nil
+		case len(s) == 1 && s[0] >= '1' && s[0] <= '9':
+			if idx := int(s[0] - '1'); idx < len(m.toolNames) {
+				return m.activate(idx), nil
+			}
 			return m, nil
-		case "right", "tab":
-			m.active = (m.active + 1) % len(m.toolNames)
-			m.scroll = 0
-			return m, nil
-		case "up":
+		case m.active == tabSettings:
+			// 设置页自己管 ↑↓/Enter（不当成滚动）
+			sm, cmd := m.settings.Update(msg)
+			m.settings = sm
+			return m, cmd
+		case s == "up":
 			m.scroll--
-		case "down":
+		case s == "down":
 			m.scroll++
-		case "pgup":
+		case s == "pgup":
 			m.scroll -= m.viewHeight()
-		case "pgdn":
+		case s == "pgdn":
 			m.scroll += m.viewHeight()
 		default:
-			s := msg.String()
-			if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
-				idx := int(s[0] - '1')
-				if idx < len(m.toolNames) {
-					m.active = idx
-					m.scroll = 0
-					return m, nil
-				}
-			}
-			// 其他按键（如 R 刷新）转发给当前工具
+			// 其他按键（如用量页的 R 刷新）转发给用量工具
 			um, cmd := m.usage.Update(msg)
 			m.usage = um
 			return m, cmd
@@ -162,11 +202,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			spans := m.tabLayoutFor()
 			for i, s := range spans {
 				if msg.X >= s.start && msg.X < s.end {
-					m.active = i
-					m.scroll = 0
-					break
+					return m.activate(i), nil
 				}
 			}
+			return m, nil
+		}
+		// 内容区点击：设置页点可编辑行直接进入编辑
+		if m.active == tabSettings && msg.Y >= 1 && msg.Y <= m.height-2 {
+			m.settings = m.settings.ClickLine(m.scroll + msg.Y - 1)
 			return m, nil
 		}
 
@@ -183,10 +226,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// 其余消息（tick、取数完成等）转发给当前工具
-	um, cmd := m.usage.Update(msg)
-	m.usage = um
-	return m, cmd
+	// 其余消息（每秒钟的 tick、取数完成、输入框光标闪烁等）同时喂给两个页面：
+	// 用量工具必须一直收到 tick（切到设置页也在轮询），设置页要收输入框的 Blink。
+	um, uc := m.usage.Update(msg)
+	sm, sc := m.settings.Update(msg)
+	m.usage, m.settings = um, sm
+	return m, tea.Batch(uc, sc)
 }
 
 // renderTabBar 渲染第 0 行：程序名 + 工具标签（选中高亮）。
@@ -206,10 +251,26 @@ func (m Model) renderTabBar() string {
 	return b.String()
 }
 
+// stateHints 是状态栏左侧的快捷键提示（随标签变）。
+func (m Model) stateHints() string {
+	if m.active == tabSettings {
+		return m.settings.Hints()
+	}
+	return "Q 退出 · R 刷新"
+}
+
+// stateRight 是状态栏右侧的状态文本与严重度（设置页显示保存状态）。
+func (m Model) stateRight() (string, int) {
+	if m.active == tabSettings {
+		return m.settings.StatusText()
+	}
+	return m.usage.StatusText()
+}
+
 // renderStatus 渲染最后一行：左「当前工具 · 快捷键提示」，右「加载/错误状态」。
 func (m Model) renderStatus() string {
-	left := " " + m.toolNames[m.active] + " · Q 退出 · R 刷新"
-	rightS, sev := m.usage.StatusText()
+	left := " " + m.toolNames[m.active] + " · " + m.stateHints()
+	rightS, sev := m.stateRight()
 	var right string
 	switch sev {
 	case 2:

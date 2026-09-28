@@ -145,7 +145,7 @@ ok  	with-linux/internal/app	0.093s
 ### 收尾（2026-09-27，用户确认）
 
 - [x] 删除旧包名产物 `dist/wl_0.1.1_arm64.deb`、`dist/wl_0.1.2-dev_arm64.deb`，避免手滑 `apt install` 重蹈覆辙。
-- [x] `~/.bashrc` 增 `export PATH="$HOME/go/bin:$PATH"`（改前备份 `~/.backups/shell-20260927/.bashrc.bak-20260927`）；新 shell 验证 `command -v wl` → `/usr/bin/wl`、`wl --version` → `wl 0.1.2-dev`，`PATH` 含 `/home/you/go/bin`。
+- [x] `~/.bashrc` 增 `export PATH="$HOME/go/bin:$PATH"`（改前备份 `~/.backups/shell-20260927/.bashrc.bak-20260927`）；新 shell 验证 `command -v wl` → `/usr/bin/wl`、`wl --version` → `wl 0.1.2-dev`，`PATH` 含 `~/go/bin`。
 - 注意：`~/go/bin` 在 PATH 中前置，若日后 `go install .../cmd/wl`，`~/go/bin/wl` 会遮蔽 deb 版。
 
 ## 2026-09-27 · 状态栏提示精简 ＋ README 改版（用户指令）
@@ -158,3 +158,42 @@ ok  	with-linux/internal/app	0.093s
 - `go test -count=1 ./...` 全绿（未动断言）。
 - 重打包 `dist/with-linux_0.1.2-dev_arm64.deb` 并 `apt install --reinstall`（`Setting up with-linux (0.1.2-dev)`；`wl --version` → `wl 0.1.2-dev`）。
 - pty 实测：`Q 退出` ✓ `R 刷新` ✓；`切换工具` ✗ `滚动` ✗ `←→` ✗ `↑↓` ✗ 均不再出现；退出码 0。
+
+## 2026-09-28 · 确认安装状态并清理遮蔽的旧版（用户指令）
+
+- 背景：用户问「项目中的版本装到本机了吗」。
+- 结论：**已装**。`dpkg -l` → `with-linux 0.1.2-dev arm64 install ok installed`；`/usr/bin/wl`（`dpkg -S` → `with-linux`）sha256 `9dbf3dc1…`，与 `dist/with-linux_0.1.2-dev_arm64.deb` 内含文件一致（`dist/pkg/wl-linux-arm64` ≡ `dist/pkgroot/wl-linux-arm64/usr/bin/wl`）；`dpkg -V with-linux` 无差异；`apt-cache policy with-linux` 无源候选（不会再被发行版 `wl` 自动升级覆盖）。
+- 「是不是当前源码」的判据（不是只看版本号）：二进制内置 VCS → `github.com/Lifeni/with-linux v0.1.2-0.20260927034601-beaa400c67ee+dirty`（11:52 脏树构建，1 分钟后被提交为 `6239c51`）；界面文案「Q 退出 · R 刷新」命中、「切换工具」不命中，与 `internal/app/app.go:211` 一致；`HEAD 4d690b1` 之后仅 README（docs）改动。注：用同一 `mkdeb.sh` 命令从当前源码重编的 sha256 不同（`76419fdd…`），因 Go 把 VCS revision/time/`+dirty` 写进二进制，非代码差异。
+- 发现的坑：`~/.bashrc:160` 前置 `~/go/bin`，其中是 `go install ...@v0.1.1` 的旧版（内置 mod `v0.1.1`、`wl --version` → `wl dev`、含旧状态栏「切换工具/滚动」）。SSH 交互 shell 会读 `.bashrc`，故实际跑的是旧版而非 0.1.2-dev。
+- 处置（用户确认）：`rm ~/go/bin/wl`；**保留** `~/.bashrc` 的 PATH 行（留给其他 Go 工具）。约定：本机正式渠道为 deb（`/usr/bin/wl`），开发迭代用 `go run ./cmd/wl` 或 `go build -o /tmp/wl ./cmd/wl`，**不再** `go install .../cmd/wl`；确需 dev 版则换名（如 `~/.local/bin/wl-dev`），避免再次遮蔽。
+
+### 验证 9：清理后实测 — PASS
+
+- `bash -ic 'command -v wl; wl --version'` → `/usr/bin/wl` / `wl 0.1.2-dev`（清理前为 `~/go/bin/wl` / `wl dev`）。
+- `ls -la ~/go/bin/` → 空目录（无其他 Go 工具受影响）；`dpkg -V with-linux` 仍无差异。
+
+## 2026-09-28 · 设置页（用户指令；范围扩张已确认，验收 A5）
+
+- 指令原文：「增加设置页面，作为一个 tab，设置要对应配置文件，目前也就是可以填写 opencode go 的 key，然后设置页面增加关于模块，写一下当前的版本号、日期等」。
+- **范围扩张**：章程原本写「v1 仅 OpenCode Go 用量」且只读展示；加设置 tab ＋ 写回配置文件超出已确认 v1 范围。已**先改章程再实现**（`AGENTS.md`：新增验收 `A5`、「界面布局 · 设置页」小节、约束里加「版本与构建信息」）。改章程前用选项征求确认（提问工具调用被中断，用户回「继续」），按推荐默认值执行：表单式交互、关于显示六项、key 掩码、先改章程。
+- 实现（一次指令，一处一处改）：
+  - `internal/config`（新）：`Path` / `Load` / `Save`。`Save` = 读原 JSON → 只改 `apiKey` → **保留未知字段** → 缩进写回；目录 `0700`、文件 `0600`、写临时文件再 rename。`internal/usage/config.go` 瘦成薄封装（`loadAPIKey()`），读取行为不变（缺失/坏 JSON → 空 key）。
+  - `internal/settings`（新）：`API Key` 可编辑行 ＋ `配置文件` 路径 ＋「关于」（版本/构建日期/commit/Go/平台/仓库）；非编辑态掩码前 6 后 4；对外 `Editing()` / `Hints()` / `StatusText()` / `ClickLine()` / `Reload()`；保存成功产出 `settings.SavedMsg`（不让 settings 直接依赖 usage，翻译在框架层）。
+  - `internal/meta`（新）：`Info` ＋ `Current(version, commit, date)`；ldflags 注入优先，缺失回退 `debug.ReadBuildInfo()`（模块版本 / `vcs.revision` / `vcs.time`，脏树加 `-dirty`）；commit 截 7 位、RFC3339 日期归档为 `YYYY-MM-DD`。
+  - `internal/app`：标签列表 → `{OpenCode Go 用量, 设置}`；按键/鼠标按 `active` **显式分发**（未引入接口/注册机制，守章程「不约定任何接口」）；编辑态下全局键让位给输入框（`Ctrl+C` 仍退出整个程序）；`settings.SavedMsg` → `usage.RefreshMsg`；切标签时 `settings.Reload()`（重读配置并退出编辑态）；状态栏左侧提示与右侧状态随标签变；其余异步消息（每秒 tick / 取数完成 / 输入框 Blink）**同时**喂给两个页面 → 切到设置页时用量轮询不中断。
+  - `cmd/wl`：`version` / `commit` / `date` 三个可注入变量；`--version` 与「关于」共用 `meta.Current`。
+  - 打包：`scripts/mkdeb.sh` 从 git 取短哈希（脏树加 `-dirty`）与构建日期并注入；`.goreleaser.yaml` 补 `{{.Commit}}` / `{{.Date}}`。
+  - 新依赖：`charm.land/bubbles/v2 v2.2.1`（`textinput`）＋传递依赖 `github.com/atotto/clipboard v0.1.4`；API 与 pty 踩坑记入 `FINDINGS.md §2.1 / §2.2`。
+
+### 验证 10：单测 ＋ pty 冒烟（开发构建） — PASS
+
+- `go test -count=1 ./...`：app / config / meta / settings / usage 全 `ok`；`gofmt -l` 无输出；`go vet ./...` 干净。
+- pty 冒烟（`/tmp/wl_smoke.py`：`pty.fork` ＋ 自写 ANSI 屏幕重建；`XDG_CONFIG_HOME` 指向 `/tmp/wl-smoke`，**不碰真实配置**）：**27/27 PASS**。
+- 画面实证（重建出的真实屏幕）：tab 栏 `With Linux  [OpenCode Go 用量]  [设置]`；设置页 `▸ API Key  oc_sk_…abcd` / `配置文件  /tmp/wl-smoke/with-linux/config.json` / `关于`（`版本 0.1.2-dev`、`构建日期 2026-09-28`、`提交 4d690b1-dirty`、`Go go1.27.1`、`平台 linux/arm64`、`仓库 https://github.com/Lifeni/with-linux`）；编辑态 `API Key  oc_sk_TEST_1234567890_abcdjunk` ＋ 状态栏 `未保存（Enter 保存 · Esc 取消）`；`Esc` 后回到掩码且配置文件未变；`Enter` 保存后状态栏 `已保存`、显示 `oc_sk_…zzzz`、文件内容与 `0600` 权限核对通过；切回用量页仍渲染；`q` 退出码 0。
+
+### 验证 11：deb 重建 ＋ 安装 ＋ 装后实测 — PASS
+
+- `VERSION=0.1.2-dev bash scripts/mkdeb.sh arm64` → `dist/with-linux_0.1.2-dev_arm64.deb`（`Package: with-linux`，内含 `./usr/bin/wl`）。
+- `sudo apt install --reinstall ./dist/with-linux_0.1.2-dev_arm64.deb` → `Setting up with-linux (0.1.2-dev)`；`dpkg -s` → `install ok installed`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.1.2-dev`；`sha256sum /usr/bin/wl` == `dist/pkg/wl-linux-arm64`（`d7d9f13e…`）；`dpkg -V` 无差异。
+- **对装好的 `/usr/bin/wl` 重跑同一 pty 冒烟：27/27 PASS**；「关于」显示 `0.1.2-dev / 2026-09-28 / 4d690b1-dirty`（`-dirty` 属实：本次改动尚未提交，`mkdeb.sh` 从 git 取哈希并标脏）。
+- 遗留：提交后重打包即可把 `-dirty` 变纯哈希；实机鼠标点击（用户侧）仍未验。

@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Lifeni/with-linux/internal/config"
 )
 
 const okBody = `{"usage":{
@@ -175,27 +177,23 @@ func TestFetchWithRetryNoRetryOnAuthErrors(t *testing.T) {
 }
 
 func TestLoadAPIKey(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := config.Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
-	if got := loadAPIKey(path); got != "" {
+	if got := loadAPIKey(); got != "" {
 		t.Fatalf("文件缺失时 key = %q, want 空", got)
 	}
 
 	os.WriteFile(path, []byte(`{"apiKey":"abc123","fillStyle":"dot"}`), 0o600)
-	if got := loadAPIKey(path); got != "abc123" {
+	if got := loadAPIKey(); got != "abc123" {
 		t.Fatalf("key = %q, want abc123", got)
 	}
 
 	os.WriteFile(path, []byte(`{broken`), 0o600)
-	if got := loadAPIKey(path); got != "" {
+	if got := loadAPIKey(); got != "" {
 		t.Fatalf("坏 JSON 时 key = %q, want 空", got)
-	}
-}
-
-func TestConfigPathXDG(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
-	if got := ConfigPath(); got != filepath.Join("/tmp/xdg-test", "with-linux", "config.json") {
-		t.Fatalf("ConfigPath = %q", got)
 	}
 }

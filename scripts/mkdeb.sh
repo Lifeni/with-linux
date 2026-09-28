@@ -3,6 +3,12 @@
 set -euo pipefail
 ARCH="${1:-$(dpkg --print-architecture)}"
 VERSION="${VERSION:-dev}"
+# 注入构建信息（「关于」区块展示）；拿不到就留空，由程序回退 Go 构建信息。
+COMMIT="${COMMIT:-$(git rev-parse --short=7 HEAD 2>/dev/null || echo "")}"
+if [ -n "$COMMIT" ] && ! git diff --quiet 2>/dev/null; then
+  COMMIT="$COMMIT-dirty"
+fi
+DATE="${DATE:-$(date +%F)}"
 # 包名用 with-linux，不用 wl：发行版源里已有同名包 wl（Emacs Wanderlust），
 # 版本号更低会被 unattended-upgrade 当成旧版覆盖，导致 wl 命令消失。
 # 命令名仍由下面 install 到 /usr/bin/wl 决定。
@@ -10,7 +16,7 @@ PKG="with-linux"
 BIN="wl-linux-$ARCH"
 DEST="dist/pkg/$BIN"
 
-CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o "$DEST" ./cmd/wl
+CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" -o "$DEST" ./cmd/wl
 
 ROOT="dist/pkgroot/$BIN"
 rm -rf "$ROOT"

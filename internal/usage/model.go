@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/Lifeni/with-linux/internal/config"
 )
 
 // Model 是用量工具的 TUI 状态：定时轮询、倒计时、错误态。
@@ -33,8 +35,8 @@ type RefreshMsg struct{}
 
 // New 读配置初始化模型。
 func New() Model {
-	path := ConfigPath()
-	key := loadAPIKey(path)
+	path := config.Path()
+	key := loadAPIKey()
 	return Model{
 		apiKey:     key,
 		hasKey:     key != "",
@@ -97,7 +99,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case RefreshMsg:
-		m.apiKey = loadAPIKey(m.configPath)
+		m.apiKey = loadAPIKey()
 		m.hasKey = m.apiKey != ""
 		m, cmd := m.doFetch()
 		return m, tea.Batch(cmd, tickCmd())
@@ -105,7 +107,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		// R 手动刷新并重读配置（与旧实现按键一致）
 		if s := msg.String(); s == "r" || s == "R" {
-			m.apiKey = loadAPIKey(m.configPath)
+			m.apiKey = loadAPIKey()
 			m.hasKey = m.apiKey != ""
 			m, cmd := m.doFetch()
 			return m, tea.Batch(cmd, tickCmd())

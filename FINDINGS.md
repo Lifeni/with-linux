@@ -67,6 +67,21 @@
 
 - **结论：bubbles 存在专门适配 Bubble Tea v2 的 `/v2` 模块，章程里"bubbles 可能卡在 v1"的风险不成立；直接使用三个 v2 模块。**
 
+## 2.1 bubbles v2 textinput（2026-09-28 为设置页实查）
+
+读自本地 module cache `charm.land/bubbles/v2@v2.2.1/textinput/textinput.go`：
+
+- 关键 API：`New()` / `Focus() tea.Cmd` / `Blur()` / `Value()` / `SetValue()` / `SetWidth()` / `CursorEnd()` / `Update(msg) (Model, tea.Cmd)` / `View()`。
+- **默认用虚拟光标**（`useVirtualCursor: true`），`Cursor()` 在虚拟光标模式下返回 nil —— 所以**不需要**设 `tea.View.Cursor`，输入框自己画光标。
+- `Update` 只处理 `tea.KeyPressMsg` 与 `tea.PasteMsg`（再往下是内部 pasteMsg）。
+- 引入 `textinput` 会带进传递依赖 `github.com/atotto/clipboard v0.1.4`（粘贴键用，纯 Go、调用外部剪贴板命令，不用就碰不到），需 `go mod tidy` 补 go.sum。
+
+## 2.2 pty 冒烟测试要点（2026-09-28）
+
+- `pty.fork()` 建出的伪终端**默认窗口是 0×0**，Bubble Tea 认为没尺寸就什么都不画（画面全空）。必须先 `ioctl(TIOCSWINSZ, pack(HHHH, rows, cols, 0, 0))` 给个尺寸。
+- 宽度对齐：抓到的 ANSI 流是**增量重绘**（只画变化的格子），直接删转义符会丢行结构；要还原"用户看到的画面"得自己维护一块字符网格（支持 CUP/EL/ED/CR/LF/BS/SGR 忽略即可），并且**东亚宽字符要占两格、填充格在拼接时丢掉**，否则中文之间会出现假空格。
+- 结论：冒烟脚本 `/tmp/wl_smoke.py`（非项目文件）用上述两点重建画面，可稳定读出 tab 栏、设置页、状态栏文本。
+
 ## 3. 目标机工具链（已查）
 
 - 目标平台：Linux arm64 / amd64（依赖均为纯 Go 实现，无 cgo）。

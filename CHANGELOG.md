@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- 「设置」tab（`A5`，属范围扩张，2026-09-28 用户确认）：
+  - `API Key` 行可编辑并写回配置文件；保留文件里其他未知字段，目录 `0700`、文件 `0600`，写临时文件再 rename
+  - 保存空串等于清除 key；保存成功后立即重读配置并刷新用量
+  - 非编辑态掩码显示 key（前 6 位 ＋ `…` ＋ 后 4 位）
+  - 「关于」区块：版本、构建日期、commit、Go 版本、平台/架构、仓库地址
+- 构建信息注入：`version` / `commit` / `date` 由 ldflags 注入（`.goreleaser.yaml`、`scripts/mkdeb.sh`），缺失时回退 Go 构建信息（模块版本 / `vcs.revision` / `vcs.time`）
+- 新依赖：`charm.land/bubbles/v2`（`textinput`）
+
+### Changed
+
+- 框架支持多标签：切到设置页时用量轮询继续（每秒 tick 仍喂给用量模型）；切标签时设置页重读配置并退出编辑态
+- 设置页 `↑`/`↓` 用于选行，不再当作内容区滚动；编辑态下 `q`/`R`/数字等全局键让位给输入框（`Ctrl+C` 仍退出）
+
 ## [0.1.1] - 2026-09-26
 
 ### Added

@@ -2,15 +2,19 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/Lifeni/with-linux/internal/config"
+	"github.com/Lifeni/with-linux/internal/meta"
+	"github.com/Lifeni/with-linux/internal/settings"
 )
 
-// newTestModel 构造带两个工具、多行占位内容的模型，用来验证"点击 tab 切换面板"与滚动。
+// newTestModel 构造两个标签（用量、设置）＋ 多行占位内容的模型，用来验证"点击 tab 切换面板"与滚动。
 func newTestModel() Model {
-	m := New()
-	m.toolNames = append(m.toolNames, "第二个工具")
+	m := New(meta.Info{Version: "test", Date: "2026-09-28"})
 	m.width, m.height = 80, 24
 	m.contentOverride = func() []string {
 		lines := make([]string, 0, 30)
@@ -20,6 +24,23 @@ func newTestModel() Model {
 		return lines
 	}
 	return m
+}
+
+// keyPress 发一个可打印按键。
+func keyPress(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Code: code, Text: string(code)})
+}
+
+// apiKeyLine 从设置页渲染结果里找出「API Key」行的行号，供鼠标命中测试用。
+func apiKeyLine(t *testing.T, m Model) int {
+	t.Helper()
+	for i, l := range m.settings.Lines(m.width, m.viewHeight()) {
+		if strings.Contains(l, "API Key") {
+			return i
+		}
+	}
+	t.Fatal("设置页找不到 API Key 行")
+	return -1
 }
 
 func TestMouseClickTabSwitchesPanel(t *testing.T) {
@@ -144,5 +165,134 @@ func TestRKeyForwardedToTool(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("R 键未转发给工具（返回 Cmd 为 nil）")
+	}
+}
+
+// —— 设置页接入框架（A5）——
+
+func TestSettingsTabStatusHints(t *testing.T) {
+	m := newTestModel()
+	if got := m.renderStatus(); !strings.Contains(got, "R 刷新") {
+		t.Fatalf("用量页状态栏缺少 R 刷新: %q", got)
+	}
+
+	nm, _ := m.Update(keyPress('2'))
+	got := nm.(Model)
+	if got.active != tabSettings {
+		t.Fatalf("按 2 后 active = %d, want %d", got.active, tabSettings)
+	}
+	status := got.renderStatus()
+	if !strings.Contains(status, "设置") || !strings.Contains(status, "Enter 编辑") {
+		t.Fatalf("设置页状态栏提示不对: %q", status)
+	}
+	if strings.Contains(status, "R 刷新") {
+		t.Fatalf("设置页不该显示用量页提示: %q", status)
+	}
+}
+
+func TestSettingsEditingTakesOverGlobalKeys(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	m := newTestModel().activate(tabSettings)
+	nm, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = nm.(Model)
+	if !m.settings.Editing() {
+		t.Fatal("Enter 未进入编辑态")
+	}
+
+	// q / 数字 在编辑态应进输入框，而不是退出或切标签
+	for _, ch := range []rune{'q', '1'} {
+		nm, cmd := m.Update(keyPress(ch))
+		m = nm.(Model)
+		if cmd != nil {
+			if _, quit := cmd().(tea.QuitMsg); quit {
+				t.Fatalf("编辑态输入 %c 触发了退出", ch)
+			}
+		}
+	}
+	if m.active != tabSettings {
+		t.Fatalf("编辑态输入数字后 active = %d, want %d", m.active, tabSettings)
+	}
+	line := m.settings.Lines(80, 24)[apiKeyLine(t, m)]
+	if !strings.Contains(line, "q1") {
+		t.Fatalf("输入未进入编辑框: %q", line)
+	}
+
+	// Esc 取消：还原、退出编辑态
+	nm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = nm.(Model)
+	if m.settings.Editing() {
+		t.Fatal("Esc 未退出编辑态")
+	}
+	if line := m.settings.Lines(80, 24)[apiKeyLine(t, m)]; strings.Contains(line, "q1") {
+		t.Fatalf("Esc 未还原输入: %q", line)
+	}
+}
+
+func TestSettingsEditingKeepsCtrlCQuitting(t *testing.T) {
+	m := newTestModel().activate(tabSettings)
+	nm, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = nm.(Model)
+
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	if cmd == nil {
+		t.Fatal("编辑态 Ctrl+C 未返回 Cmd")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("编辑态 Ctrl+C 产出 %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestSettingsSaveWritesConfigAndRefreshesUsage(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	m := newTestModel().activate(tabSettings)
+	nm, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = nm.(Model)
+	for _, ch := range []rune("oc_sk_abc123") {
+		nm, _ := m.Update(keyPress(ch))
+		m = nm.(Model)
+	}
+
+	nm, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = nm.(Model)
+	if m.settings.Editing() {
+		t.Fatal("Enter 未保存并退出编辑态")
+	}
+	if cmd == nil {
+		t.Fatal("保存后未返回 Cmd")
+	}
+	if _, ok := cmd().(settings.SavedMsg); !ok {
+		t.Fatalf("Cmd 产出 %T, want settings.SavedMsg", cmd())
+	}
+	if got := config.Load().APIKey; got != "oc_sk_abc123" {
+		t.Fatalf("配置里 key = %q, want oc_sk_abc123", got)
+	}
+
+	// 框架收到 SavedMsg → 用量工具重读配置并取数
+	_, cmd2 := m.Update(settings.SavedMsg{})
+	if cmd2 == nil {
+		t.Fatal("SavedMsg 未触发用量刷新")
+	}
+}
+
+func TestSettingsMouseClickEntersEdit(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newTestModel().activate(tabSettings)
+	row := apiKeyLine(t, m)
+
+	// 内容区第 0 行（tab 行下第一行）不对应可编辑行，不进入编辑
+	if row == 0 {
+		t.Fatalf("测试前提不成立：API Key 行号 = 0")
+	}
+	nm, _ := m.Update(tea.MouseClickMsg{X: 5, Y: 1, Button: tea.MouseLeft})
+	if nm.(Model).settings.Editing() {
+		t.Fatal("点非可编辑行进入了编辑态")
+	}
+
+	// 点可编辑行（内容区行号 row → 终端行 1+row）
+	nm, _ = m.Update(tea.MouseClickMsg{X: 5, Y: 1 + row, Button: tea.MouseLeft})
+	if !nm.(Model).settings.Editing() {
+		t.Fatal("点可编辑行未进入编辑态")
 	}
 }

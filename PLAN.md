@@ -2,7 +2,7 @@
 
 > 章程见 `AGENTS.md`。计划经用户确认（2026-09-25「按这个开工」）。进度与验证记录见 `PROGRESS.md`，调研结论见 `FINDINGS.md`。
 
-**状态（2026-09-25）：M0–M4 全部完成**，A1–A4 验收核对见 `PROGRESS.md`；遗留：用户实机鼠标验证、403 真实路径。
+**状态（2026-09-28）：M0–M5 完成**，A1–A5 验收核对见 `PROGRESS.md`；遗留：用户实机鼠标验证、403 真实路径。
 
 ## M0 · 只读调研（动手前）
 
@@ -31,6 +31,20 @@
 ## M4 · 验收核对
 
 - A1–A4 逐条在目标机实测，展示真实输出后才说「完成」
+
+## M5 · 设置页（2026-09-28，范围扩张已确认，验收 A5）
+
+- 章程先改（`AGENTS.md`：`A5` ＋「界面布局 · 设置页」＋ 版本注入约束），再动代码
+- 抽出 `internal/config`（`Path` / `Load` / `Save`）：`usage` 改为共用；`Save` 保留未知字段、目录 0700、文件 0600、写临时文件再 rename
+- 新增 `internal/settings`（第三个包，与 `usage` 平级）：`API Key` 可编辑行 ＋ `配置文件` 路径 ＋「关于」区块（版本/构建日期/commit/Go/平台/仓库）
+- 交互：表单式（`↑↓` 选行、`Enter` 编辑/保存、`Esc` 取消；编辑态下全局键让位给输入，`Ctrl+C` 仍退出；鼠标点可编辑行即进编辑）
+- 保存成功 → `settings.SavedMsg` → 框架转成 `usage.RefreshMsg`（重读配置并立即取数）
+- 构建信息：`internal/meta` 统一注入/回退逻辑；`cmd/wl` 注入 `version`/`commit`/`date`，`--version` 与「关于」共用
+- 打包：`scripts/mkdeb.sh`、`.goreleaser.yaml` 补 `-X main.commit` / `-X main.date`
+
+### M5 完成定义
+
+- `go test ./...` 全绿；pty 冒烟脚本重建画面显示：tab 栏两个标签、设置页掩码与「关于」、Esc 取消不改文件、Enter 保存回写 0600、切回用量页轮询仍在、`q` 退出码 0
 
 ## 纪律
 
