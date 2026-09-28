@@ -207,3 +207,24 @@ ok  	with-linux/internal/app	0.093s
 - 自动安装：`VERSION=0.1.2-dev bash scripts/mkdeb.sh arm64` → `sudo apt install --reinstall` → `Setting up with-linux (0.1.2-dev)`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.1.2-dev`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`6f765c45…`）；`dpkg -V` 无差异。
 - 装后对 `/usr/bin/wl` 跑 pty 冒烟：**27/27 PASS**；「关于」显示 `版本 0.1.2-dev / 构建日期 2026-09-28 / 提交 396fc1c`（干净哈希，已无 `-dirty`）。
 - 真实配置未被触碰：`~/.config/with-linux/config.json` 仍为 2026-09-25 21:58，md5 `fb8132d2…`。
+
+## 2026-09-28 · 界面调整：点阵居中 ＋ 设置页线框居中（用户指令）
+
+- 指令：「opencode用量页面中三个点阵没有在页面中水平居中，有点靠左，调整一下。设置页面用一个线框框起来，也在页面中水平和垂直居中」。
+- **先量后改**：用 tmux `capture-pane` 在真实终端里量旧版点阵墨迹的左右留白（60–160 共 13 个宽度）——偶数宽 `左-右 = -1`（偏左半格）、奇数宽 `= -2`（偏左一整格）。根因：`lead = 1+padL` 且 `padL = (termCols-2-contentW)/2`，既少算 1 格，又把每块末尾那个空格算进了宽度。
+- 实现：
+  - 点阵按**墨迹宽度**居中：每格是「点+空」两字符，去掉每块末尾空格后 `inkW = (2*colW-1)*3 + 2*(gapW+1)`，`padL = (termCols-inkW)/2`。
+  - 三块墨迹宽恒为奇数 ⇒ `inkW` 必为奇数，偶数宽终端里左右留白不可能同时精确相等；此时把多出的 1 格放进**第一段块间距**（而非右侧留白），保证左右留白相等（代价：两段块间距相差 1 格）。
+  - 标签行同步：用同一 `labelBlockW = blockW-1` 与同一组 `gap1/gap2`，保证与点阵三列对齐。
+  - 设置页：拆出 `innerLines()`（框内内容）→ `lipgloss.RoundedBorder` 线框 → `lipgloss.Place(w, h, Center, Center, box)`；行号映射改为 `boxTop(height)` / `apiKeyLine(height)`（整框垂直居中 ⇒ 行号依赖高度），`app` 鼠标命中随之传 `viewHeight()`。
+  - 窄终端兜底：新增 `usage.clampLines`，任何行超过终端宽度就 `MaxWidth` 截断（修掉此前标签行 / 配置文件行折行）。
+- 新增断言：`TestDotMatrixHorizontallyCentered`、`TestLinesNeverExceedWidth`、`TestBoxCenteredInContent`（线框水平＋垂直居中、行数、不超宽）。
+
+### 验证 13：单测 ＋ tmux 实测 ＋ 装后实测 — PASS
+
+- `go test -count=1 ./...`：app / config / meta / settings / usage 全 `ok`；`gofmt -l` 空、`go vet` 干净。
+- tmux 实测（假 key，13 个宽度）：新版左右留白**全部 0 差**（60 / 80 / 90 / 100 / 101 / 110 / 120 / 121 / 130 / 140 / 141 / 150 / 160）；旧版同宽度为 -1（偶数）/ -2（奇数）。
+- 装后实测 `/usr/bin/wl`（宽 100×24）：点阵每行 `左 2 右 2`；设置页线框 `上 4 下 4`、`左 24 右 24`，框内 `提交 43ee6c2`（干净哈希）。
+- 提交 `43ee6c2 fix: 用量页点阵精确水平居中；设置页加线框并水平垂直居中`；自动安装：`Setting up with-linux (0.1.2-dev)`，`wl --version` → `wl 0.1.2-dev`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`48d939cf…`），`dpkg -V` 无差异。
+- 已知取舍：偶数宽终端里第一段块间距比第二段宽 1 格（换来左右留白相等）。若更在意两段间距一致，把 `view.go` 的 `gapA` 特殊分支去掉即回到「间距相等 + 右侧多 1 格留白」。
+- 过程失误：一次 tmux 调试因会话已存在、环境变量没进会话，误用了**真实配置**（画面里出现过真实 key 明文与真实用量数字）。已把脚本改成 `env XDG_CONFIG_HOME=...` 显式传入，之后均用假 key；这也再次说明该 key 建议轮换。
