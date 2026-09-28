@@ -249,3 +249,20 @@ ok  	with-linux/internal/app	0.093s
 - 装后实测 `/usr/bin/wl`（30×12）：同上；「关于」显示 `提交 47b8f61`（干净哈希）。
 - 提交 `47b8f61 feat: 窄屏适配 A+B；设置页线框左右内边距加到 4 格`；自动安装：`Setting up with-linux (0.1.2-dev)`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`a9925178…`），`dpkg -V` 无差异。
 - 遗留（用户 2026-09-28 决定不做、不列入计划）：窄宽两段式排版、极小终端提示（`usage-tui.js` 式文本条降级）。
+
+## 2026-09-28 · 发布 v0.2.0（用户指令）
+
+- 版本决策：`[Unreleased]` 里是**新功能**（设置页 A5）＋ 一批 UI/窄屏修复 ⇒ 按语义化版本发 **0.2.0**（0.1.1 → 0.2.0）。
+- 发布前收尾：CHANGELOG `[Unreleased]` → `## [0.2.0] - 2026-09-28` ＋ 底部 tag 链接；PLAN 状态行更新为「M0–M5 完成；遗留仅 403 真实路径」＋ 记录「A1 实机鼠标验证 2026-09-28 完成」「窄屏 C/D 不做」。
+- 提交：`f805466 docs: 发布 v0.2.0（CHANGELOG 定版、PLAN 记录 A1 实机验证完成与窄屏 C/D 不做）`。
+
+### 验证 15：发版全链路 — PASS
+
+- 推送：`git push origin main`（`4d690b1..f805466`）；`git tag -a v0.2.0` ＋ `git push origin v0.2.0`。
+- CI：`release` workflow（tag `v*` 触发）run **36411738152** → `completed / success`。备注：CI 有 Node.js 20 弃用告警（`checkout@v4`/`setup-go@v5`/`goreleaser-action@v6` 被强制跑在 Node 24），不影响构建产物。
+- Release：https://github.com/Lifeni/with-linux/releases/tag/v0.2.0（`draft: false`、`prerelease: false`），产物齐全：`with-linux-linux-{amd64,arm64}.tar.gz`、`with-linux_0.2.0_{amd64,arm64}.deb`、`with-linux_0.2.0_{amd64,arm64}.rpm`、`checksums.txt`。
+- 产物校验：下载 `with-linux_0.2.0_arm64.deb` → sha256 `41930652…`，与 Release 里 `checksums.txt` 同值。
+- 装机（用**发布产物**，不是本地 `mkdeb.sh`）：`sudo apt install --reinstall ./with-linux_0.2.0_arm64.deb` → `Unpacking with-linux (0.2.0) over (0.1.2-dev)` / `Setting up with-linux (0.2.0)`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.2.0`；`dpkg -V` 无差异；`apt-cache policy` 显示 `Installed/Candidate: 0.2.0`。
+- 装后实测 `/usr/bin/wl`：pty 冒烟 **27/27 PASS**（「关于」显示 `版本 0.2.0` / `构建日期 2026-09-28` / `提交 f805466`）；tmux 100×26 设置页线框与点阵居中正常；30×12 顶栏降级 `[用量] [设置]`、状态栏双侧保留、设置页 `PgDn` 可滚到底。
+- 真实配置未被触碰：`~/.config/with-linux/config.json` 仍 2026-09-25 21:58，md5 `fb8132d2…`。
+- 备注：本地 `0.1.2-dev` 的 deb 已被 0.2.0 覆盖；以后本地迭代仍用 `VERSION=... bash scripts/mkdeb.sh`，正式发布一律走 tag ＋ CI。
