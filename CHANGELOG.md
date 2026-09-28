@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.2.0] - 2026-09-28
 
 ### Added
 
@@ -55,5 +55,6 @@
 - 配置：`$XDG_CONFIG_HOME/with-linux/config.json`（默认 `~/.config/with-linux/config.json`），`apiKey` 字段
 - 交付：单一可执行文件，全静态交叉编译 `linux/amd64` ＋ `linux/arm64`
 
+[0.2.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.2.0
 [0.1.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.1.0
