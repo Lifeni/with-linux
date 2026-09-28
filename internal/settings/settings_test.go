@@ -69,13 +69,13 @@ func TestLayoutLineMatchesRender(t *testing.T) {
 		{innerPlatform, labelPlatform},
 		{innerRepo, labelRepo},
 	} {
-		line := top + 1 + tc.inner // +1 = 上边框
+		line := top + 2 + tc.inner // +2 = 上边框 + 上内边距
 		if !strings.Contains(lines[line], tc.label) {
 			t.Fatalf("框内第 %d 行（内容区第 %d 行）不含 %q: %q", tc.inner, line, tc.label, lines[line])
 		}
 	}
-	if got := apiKeyLine(h); got != top+1+innerAPIKey {
-		t.Fatalf("apiKeyLine(%d) = %d, want %d", h, got, top+1+innerAPIKey)
+	if got := apiKeyLine(h); got != top+2+innerAPIKey {
+		t.Fatalf("apiKeyLine(%d) = %d, want %d", h, got, top+2+innerAPIKey)
 	}
 }
 
@@ -90,11 +90,11 @@ func TestBoxCenteredInContent(t *testing.T) {
 		}
 
 		top := boxTop(h)
-		if top+innerRows+2 > h {
+		if top+innerRows+boxChromeH > h {
 			t.Fatalf("Lines(%d,%d) 线框放不下", w, h)
 		}
 		// 垂直居中：上下留白差 ≤1
-		bottom := h - (top + innerRows + 2)
+		bottom := h - (top + innerRows + boxChromeH)
 		if d := top - bottom; d > 1 || d < -1 {
 			t.Fatalf("Lines(%d,%d) 垂直不居中：上 %d 下 %d", w, h, top, bottom)
 		}

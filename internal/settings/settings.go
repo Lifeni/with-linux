@@ -55,8 +55,11 @@ const (
 // gutterW 是可编辑行的选择标记宽度（"▸ " 或两个空格）。
 const gutterW = 2
 
-// boxChromeW 是线框占用的水平宽度：左右边框各 1 ＋ 左右内边距各 1。
-const boxChromeW = 4
+// boxChromeW 是线框占用的水平宽度：左右边框各 1 ＋ 左右内边距各 2。
+const boxChromeW = 6
+
+// boxChromeH 是线框占用的垂直高度：上下边框各 1 ＋ 上下内边距各 1（内边距=一个行高）。
+const boxChromeH = 4
 
 // tailMaskMin 是掩码时保留头尾的最小长度：短于它就整段掩码。
 const tailMaskMin = 12
@@ -71,7 +74,7 @@ var (
 	stBox     = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("240")).
-			Padding(0, 1)
+			Padding(1, 2)
 )
 
 // Model 是设置页状态。
@@ -279,7 +282,7 @@ func (m Model) innerLines(width int) []string {
 
 // boxTop 是线框在内容区里的起始行（垂直居中；内容比区域高时贴顶）。
 func boxTop(height int) int {
-	t := (height - (innerRows + 2)) / 2 // +2 = 上下两条边框
+	t := (height - (innerRows + boxChromeH)) / 2
 	if t < 0 {
 		t = 0
 	}
@@ -287,7 +290,8 @@ func boxTop(height int) int {
 }
 
 // apiKeyLine 是内容区里 API Key 行的行号（整框垂直居中，故与高度有关）。
-func apiKeyLine(height int) int { return boxTop(height) + 1 + innerAPIKey }
+// +2 = 上边框 + 上内边距（各 1 行）。
+func apiKeyLine(height int) int { return boxTop(height) + 2 + innerAPIKey }
 
 // Lines 渲染设置页：内容用线框框起来，整体在 width×height 里水平、垂直居中，恰好 height 行。
 func (m Model) Lines(width, height int) []string {
