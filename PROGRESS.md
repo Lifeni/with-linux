@@ -228,3 +228,24 @@ ok  	with-linux/internal/app	0.093s
 - 提交 `43ee6c2 fix: 用量页点阵精确水平居中；设置页加线框并水平垂直居中`；自动安装：`Setting up with-linux (0.1.2-dev)`，`wl --version` → `wl 0.1.2-dev`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`48d939cf…`），`dpkg -V` 无差异。
 - 已知取舍：偶数宽终端里第一段块间距比第二段宽 1 格（换来左右留白相等）。若更在意两段间距一致，把 `view.go` 的 `gapA` 特殊分支去掉即回到「间距相等 + 右侧多 1 格留白」。
 - 过程失误：一次 tmux 调试因会话已存在、环境变量没进会话，误用了**真实配置**（画面里出现过真实 key 明文与真实用量数字）。已把脚本改成 `env XDG_CONFIG_HOME=...` 显式传入，之后均用假 key；这也再次说明该 key 建议轮换。
+
+## 2026-09-28 · 窄屏适配（A+B）＋ 线框内边距（用户指令）
+
+- 指令：「设置页面线框左右边距再增大，剩下的做A+B」。
+- **先量后改**（tmux）：窄屏现状——30×12 顶栏被截成 `[OpenCode Go 用`、状态栏右侧**整个消失**、设置页线框底部被切且**滚不动**；24×10 只显示到 `版本`；20×8 只到 `配置文件`。根因两条：(1) 顶/底栏按全宽硬画，超宽就被终端截掉；(2) 两个工具都返回「恰好视高」行 ⇒ `maxScroll()==0` ⇒ 章程里的「可滚动」是**死代码**。
+- 实现：
+  - **A 顶/底栏逐级降级**：顶栏新增 `tabPlanFor()`（全名 → 短名 → 去程序名 → 只留当前 tab ＋ `…`），`tabLayoutFor` 与 `renderTabBar` **共用同一份方案**，命中区间与渲染不会脱节；状态栏改候选表（完整提示 → `Q 退出` ＋ 短状态 → 短名 → 只留状态），**右侧状态始终保留**；两个工具加 `ShortStatusText()`（`401`/`403`/`网络`/`格式`/`未配置`/`查询中`/`Ns`；`已保存`/`未保存`/`编辑中`/`失败`）；最后 `clampStyled` 兜底截断。
+  - **B 内容区「自然高度 ＋ 框架居中/滚动」**：设置页 `Lines(width)` 返回自然高度（16 行），**水平居中留在工具内、垂直居中与滚动交给框架**；框架新增 `contentOffset()`（不足一屏时 `(视高−行数)/2`）与 `contentStart()`（渲染与鼠标命中共用），`render` 按窗口取行；`PgUp`/`PgDn`/滚轮在两个页面都生效。用量页仍是图表，按可用高度铺满（不需要滚动）。
+  - 顺带修两个真 bug：① `PgDown` **从未生效**（bubbletea v2 键名是 `pgdown`，原代码写的 `pgdn` 是死分支）；② 居中偏移被当成「跳过内容」（`start = offset + scroll`），内容不足一屏时反而把顶部顶掉。
+  - 设置页线框：`Padding(1, 4)`（上下各 1 行、左右各 4 格），`boxChromeW` 4 → 10。
+- 测试：新增 `TestBarsNeverExceedWidth` / `TestTabBarDegrades` / `TestStatusDegrades` / `TestSettingsContentCenteredWhenFits` / `TestSettingsContentScrollsWhenTaller` / `TestUsageContentFillsViewWithoutScroll` / `TestShortStatusText`；app 包加 `TestMain` 把 `XDG_CONFIG_HOME` 指到临时目录（**测试不再读真实配置**）；settings 测试改为自然高度口径。
+
+### 验证 14：单测 ＋ tmux 实测 ＋ 装后实测 — PASS
+
+- `go test -count=1 ./...` 全绿；`gofmt -l` 空、`go vet` 干净；pty 冒烟 **27/27 PASS**（宽 100 无回归）。
+- tmux 实测（假 key）：
+  - **30×12**：顶栏 `[用量] [设置]`（不再被截）；状态栏 `用量 · Q 退出` ＋ `待刷新`（右侧状态保留）；设置页线框完整，`PgDn` 滚到底可见 `平台`/`仓库` 与下边框。
+  - **24×10**：顶栏 `[用量] [设置]`；状态栏 `用量 · Q 退出  401`；设置页可滚。线框**右侧仍略被截**（24 宽 < 线框自然宽）——属「方案 C 两段式」范围，用户本次未选。
+- 装后实测 `/usr/bin/wl`（30×12）：同上；「关于」显示 `提交 47b8f61`（干净哈希）。
+- 提交 `47b8f61 feat: 窄屏适配 A+B；设置页线框左右内边距加到 4 格`；自动安装：`Setting up with-linux (0.1.2-dev)`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`a9925178…`），`dpkg -V` 无差异。
+- 遗留（方案 C/D，用户未选，随时可做）：窄宽（< ~34）下设置页线框右侧被截、值截断较早；极窄（< 24）下用量页三列点阵退化；无「终端太小」提示。
