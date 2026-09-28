@@ -91,6 +91,24 @@ func TestMouseClickTabSwitchesPanel(t *testing.T) {
 	}
 }
 
+func TestMouseNonLeftDoesNotClick(t *testing.T) {
+	m := newTestModel()
+	spans := m.tabLayoutFor()
+	x := (spans[tabSettings].start + spans[tabSettings].end) / 2
+
+	nm, _ := m.Update(tea.MouseClickMsg{X: x, Y: 0, Button: tea.MouseRight})
+	if got := nm.(Model).active; got != tabUsage {
+		t.Fatalf("右键切 tab 后 active = %d, want %d", got, tabUsage)
+	}
+
+	settingsModel := m.activate(tabSettings)
+	row := apiKeyLine(t, settingsModel)
+	nm2, _ := settingsModel.Update(tea.MouseClickMsg{X: 5, Y: 1 + row, Button: tea.MouseRight})
+	if nm2.(Model).settings.Editing() {
+		t.Fatal("右键设置行进入了编辑态")
+	}
+}
+
 func TestMouseWheelScrollsContent(t *testing.T) {
 	m := newTestModel()
 
@@ -285,7 +303,11 @@ func TestSettingsSaveWritesConfigAndRefreshesUsage(t *testing.T) {
 	if _, ok := cmd().(settings.SavedMsg); !ok {
 		t.Fatalf("Cmd 产出 %T, want settings.SavedMsg", cmd())
 	}
-	if got := config.Load().APIKey; got != "oc_sk_abc123" {
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("读取配置失败: %v", err)
+	}
+	if got := cfg.APIKey; got != "oc_sk_abc123" {
 		t.Fatalf("配置里 key = %q, want oc_sk_abc123", got)
 	}
 

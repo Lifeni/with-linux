@@ -1,24 +1,23 @@
-# 只在发版（推送 v* tag）时构建并发布到 Release；日常 push/PR 不触发。
-name: release
+name: ci
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - "**"
+  pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  goreleaser:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
       - name: Check module files
@@ -29,10 +28,10 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -count=1 ./...
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Race test
+        run: go test -race -count=1 ./...
+      - name: Cross-build
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -o "/tmp/wl-linux-$arch" ./cmd/wl
+          done

@@ -1,7 +1,9 @@
 package usage
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -20,14 +22,23 @@ type Model struct {
 	fetching    bool
 	hasKey      bool
 
-	apiKey     string
-	configPath string
-	url        string // 测试可覆写
-	client     *http.Client
-	now        time.Time // 由每秒 tick 更新，渲染倒计时用
+	apiKey         string
+	configPath     string
+	configErr      string
+	configErrShort string
+	url            string // 测试可覆写
+	client         *http.Client
+	now            time.Time // 由每秒 tick 更新，渲染倒计时用
+
+	fetchID  uint64
+	fetchCtx context.Context
+	cancel   context.CancelFunc
 }
 
-type fetchDoneMsg struct{ res Result }
+type fetchDoneMsg struct {
+	id  uint64
+	res Result
+}
 
 type tickMsg time.Time
 
@@ -36,16 +47,15 @@ type RefreshMsg struct{}
 
 // New 读配置初始化模型。
 func New() Model {
-	path := config.Path()
-	key := loadAPIKey()
-	return Model{
-		apiKey:     key,
-		hasKey:     key != "",
-		configPath: path,
+	m := Model{
+		configPath: config.Path(),
 		url:        UsageURL,
 		client:     &http.Client{Timeout: RequestTimeout},
 		now:        time.Now(),
 	}
+	m = m.reloadKey()
+	m, _ = m.startFetch()
+	return m
 }
 
 func tickCmd() tea.Cmd {
@@ -53,33 +63,45 @@ func tickCmd() tea.Cmd {
 }
 
 func (m Model) fetchCmd() tea.Cmd {
+	id, ctx := m.fetchID, m.fetchCtx
 	key, url, client := m.apiKey, m.url, m.client
 	return func() tea.Msg {
-		return fetchDoneMsg{res: fetchWithRetry(client, url, key)}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return fetchDoneMsg{id: id, res: fetchWithRetryContext(ctx, client, url, key)}
 	}
 }
 
-// doFetch 发起一轮取数。取数中不重复发起（与旧实现 doFetch 一致）。
-func (m Model) doFetch() (Model, tea.Cmd) {
-	if m.fetching {
-		return m, tickCmd()
+// startFetch 取消旧请求并立即发起一轮新取数。请求代次会让迟到的旧结果失效。
+func (m Model) startFetch() (Model, tea.Cmd) {
+	if m.cancel != nil {
+		m.cancel()
 	}
+	m.fetchID++
+	m.fetchCtx, m.cancel = context.WithCancel(context.Background())
 	m.fetching = true
 	m.nextFetchAt = time.Now().Add(RefreshInterval)
 	return m, m.fetchCmd()
 }
 
-// Init 启动即取一次数（与旧实现一致），并开始每秒 tick。
-// 注意：Init 无法更新模型值，fetching/nextFetchAt 由随后的 fetchDoneMsg 补齐。
+// Init 启动 New 中已经准备好的取数，并启动唯一一条每秒 tick 循环。
 func (m Model) Init() tea.Cmd {
-	_, cmd := m.doFetch()
-	return tea.Batch(cmd, tickCmd())
+	return tea.Batch(m.fetchCmd(), tickCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case fetchDoneMsg:
+		if msg.id != m.fetchID {
+			return m, nil
+		}
 		m.fetching = false
+		if m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
+		m.fetchCtx = nil
 		m.lastFetchAt = time.Now()
 		m.lastError = msg.res.Err
 		m.hasKey = msg.res.Err != ErrNoKey
@@ -93,29 +115,49 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tickMsg:
 		m.now = time.Now()
-		if !m.fetching && m.hasKey && !m.nextFetchAt.IsZero() && m.now.After(m.nextFetchAt) {
-			m, cmd := m.doFetch()
+		if !m.fetching && m.hasKey && !m.nextFetchAt.IsZero() && !m.now.Before(m.nextFetchAt) {
+			m, cmd := m.startFetch()
 			return m, tea.Batch(cmd, tickCmd())
 		}
 		return m, tickCmd()
 
 	case RefreshMsg:
-		m.apiKey = loadAPIKey()
-		m.hasKey = m.apiKey != ""
-		m, cmd := m.doFetch()
-		return m, tea.Batch(cmd, tickCmd())
+		m = m.reloadKey()
+		m, cmd := m.startFetch()
+		return m, cmd
 
 	case tea.KeyPressMsg:
 		// R 手动刷新并重读配置（与旧实现按键一致）
 		if s := msg.String(); s == "r" || s == "R" {
-			m.apiKey = loadAPIKey()
-			m.hasKey = m.apiKey != ""
-			m, cmd := m.doFetch()
-			return m, tea.Batch(cmd, tickCmd())
+			m = m.reloadKey()
+			m, cmd := m.startFetch()
+			return m, cmd
 		}
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) reloadKey() Model {
+	key, err := loadAPIKey()
+	m.apiKey = key
+	m.hasKey = key != ""
+	m.configErr = ""
+	m.configErrShort = ""
+	if err != nil {
+		m.configErr = config.UserMessage(err)
+		m.configErrShort = config.UserShortMessage(err)
+	}
+	return m
+}
+
+// refreshSeconds 与旧 JS 的 Math.ceil 保持一致，避免还剩不足 1 秒时显示 0s。
+func refreshSeconds(next, now time.Time) int {
+	secs := int(math.Ceil(next.Sub(now).Seconds()))
+	if secs < 0 {
+		return 0
+	}
+	return secs
 }
 
 // ErrorText 是错误码对应的显示文案（FINDINGS.md §1.2）。
@@ -134,6 +176,9 @@ func ErrorText(code string) string {
 
 // ShortStatusText 是窄屏降级用的短状态：只给码或秒数，不带文案。
 func (m Model) ShortStatusText() string {
+	if m.configErrShort != "" {
+		return m.configErrShort
+	}
 	if !m.hasKey {
 		return "未配置"
 	}
@@ -146,10 +191,7 @@ func (m Model) ShortStatusText() string {
 	if m.lastFetchAt.IsZero() {
 		return "待刷新"
 	}
-	secs := int(m.nextFetchAt.Sub(m.now).Seconds())
-	if secs < 0 {
-		secs = 0
-	}
+	secs := refreshSeconds(m.nextFetchAt, m.now)
 	return fmt.Sprintf("%ds", secs)
 }
 
@@ -174,6 +216,9 @@ func shortError(code string) string {
 // StatusText 是底部状态提示右侧的文本（FINDINGS.md §1.2）。
 // severity：2=错误（红），1=注意（琥珀），0=正常（暗色）。
 func (m Model) StatusText() (text string, severity int) {
+	if m.configErr != "" {
+		return m.configErr, 2
+	}
 	if !m.hasKey {
 		return "未配置 Key", 1
 	}
@@ -186,9 +231,6 @@ func (m Model) StatusText() (text string, severity int) {
 	if m.lastFetchAt.IsZero() {
 		return "待刷新", 0
 	}
-	secs := int(m.nextFetchAt.Sub(m.now).Seconds())
-	if secs < 0 {
-		secs = 0
-	}
+	secs := refreshSeconds(m.nextFetchAt, m.now)
 	return fmt.Sprintf("%ds 后刷新", secs), 0
 }

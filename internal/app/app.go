@@ -288,6 +288,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft {
+			return m, nil
+		}
 		if msg.Y == 0 {
 			spans := m.tabLayoutFor()
 			for i, s := range spans {

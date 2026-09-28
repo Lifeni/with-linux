@@ -83,6 +83,7 @@ type Model struct {
 	input    textinput.Model
 	editing  bool
 	selected int
+	loadErr  string
 	saveErr  string
 	saved    bool
 }
@@ -92,13 +93,11 @@ func New(info meta.Info) Model {
 	m := Model{
 		info:       info,
 		configPath: config.Path(),
-		key:        config.Load().APIKey,
 		input:      textinput.New(),
 	}
 	m.input.Prompt = ""
 	m.input.Placeholder = "oc_sk_…"
-	m.input.SetValue(m.key)
-	return m
+	return m.reloadConfig()
 }
 
 // Editing 报告是否处于编辑态：框架据此把全局键让给输入框。
@@ -109,9 +108,7 @@ func (m Model) Reload() Model {
 	m.editing = false
 	m.input.Blur()
 	m.saveErr = ""
-	m.key = config.Load().APIKey
-	m.input.SetValue(m.key)
-	return m
+	return m.reloadConfig()
 }
 
 // Hints 是状态栏左侧的快捷键提示。
@@ -127,6 +124,8 @@ func (m Model) StatusText() (text string, severity int) {
 	switch {
 	case m.saveErr != "":
 		return "保存失败：" + m.saveErr, 2
+	case m.loadErr != "":
+		return m.loadErr, 2
 	case m.editing:
 		if m.input.Value() != m.key {
 			return "未保存（Enter 保存 · Esc 取消）", 1
@@ -143,6 +142,8 @@ func (m Model) ShortStatusText() string {
 	switch {
 	case m.saveErr != "":
 		return "失败"
+	case m.loadErr != "":
+		return "配置错误"
 	case m.editing:
 		if m.input.Value() != m.key {
 			return "未保存"
@@ -219,10 +220,26 @@ func (m Model) save() (Model, tea.Cmd) {
 	m.key = val
 	m.editing = false
 	m.input.Blur()
+	m.loadErr = ""
 	m.saveErr = ""
 	m.saved = true
 	m.input.SetValue(val)
 	return m, func() tea.Msg { return SavedMsg{} }
+}
+
+func (m Model) reloadConfig() Model {
+	cfg, err := config.Load()
+	m.loadErr = ""
+	m.key = ""
+	switch {
+	case err == nil:
+		m.key = cfg.APIKey
+	case config.IsMissing(err):
+	default:
+		m.loadErr = config.UserMessage(err)
+	}
+	m.input.SetValue(m.key)
+	return m
 }
 
 // maskKey 掩码显示 key：前 6 位 ＋ … ＋ 后 4 位；过短整段掩码；空值显示提示。

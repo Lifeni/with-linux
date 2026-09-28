@@ -201,7 +201,7 @@ ok  	with-linux/internal/app	0.093s
 ### 验证 12：提交 ＋ 自动装到本机（新工作流） — PASS
 
 - **提交前敏感信息扫描抓到两处泄露并已清理**：`internal/settings/settings_test.go` 的测试 key 直接抄了真实 key 的前 30 个字符、`AGENTS.md` 的掩码示例抄了真实 key 的后 4 个字符。已改成明显假值（`oc_sk_fake_key_for_tests_0123`、掩码示例 `oc_sk_aa…zz99`），并在章程「设置页 · Key 显示」补一句「文档/代码示例一律用明显假值」。
-- `git log --all -S'6079fabe'` / `-S'rpCm5ple'` 无历史命中；提交后 `git grep` 复扫无命中；另把 `PROGRESS.md` 里残留的 `/home/you/go/bin` 改成 `~/go/bin`（`/with-linux` 等构建产物本就在 `.gitignore`，`config.json`、`usage-tui.js` 也在）。
+- 当时认为两组旧 key 搜索片段没有历史命中；2026-09-28 后续复核发现它们已被 `dcf866e` 提交进 `PROGRESS.md`，因此**历史仍含旧 key 片段**。当前工作树已删除这些具体值，但必须把对应 key 视为已泄露并轮换；是否重写远端历史由用户决定，不能只靠删工作树解决。另把 `PROGRESS.md` 里残留的家目录路径改成 `~/go/bin`（`/with-linux` 等构建产物本就在 `.gitignore`，`config.json`、`usage-tui.js` 也在）。
 - **工作流新增两条**（用户 2026-09-28 要求，写进 `AGENTS.md §3`）：**8. 改完自动装到本机**（`mkdeb.sh` ＋ `apt install --reinstall`，并对**已安装的** `/usr/bin/wl` 复验）、**9. 提交前扫敏感信息**。
 - 提交：`396fc1c feat: 设置页 —— 编辑 API Key 写回配置 ＋ 关于构建信息（A5）`，工作区干净。
 - 自动安装：`VERSION=0.1.2-dev bash scripts/mkdeb.sh arm64` → `sudo apt install --reinstall` → `Setting up with-linux (0.1.2-dev)`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.1.2-dev`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`6f765c45…`）；`dpkg -V` 无差异。
@@ -276,3 +276,31 @@ ok  	with-linux/internal/app	0.093s
 - **清 dist 里的旧产物**：删 `with-linux_0.1.2-dev_arm64.deb`（被 0.2.0 取代）与验证用的 `with-linux_9.9.9-test_arm64.deb`；保留当前树的 `with-linux_0.2.0~dev_arm64.deb`。
 - **本次没有重装**：这轮只改了打包脚本和文档，**二进制与已装的发布版 0.2.0 完全一致**（当前 HEAD `e337b41` 相对 tag `f805466` 只多了 docs/scripts 提交），所以按「改完自动装」的精神说明：装了也没有可测的新东西，保留发布版 0.2.0；要装 `dist/with-linux_0.2.0~dev_arm64.deb` 随时可装（版本号显示 `wl 0.2.0~dev`）。
 - 本机状态：`wl --version` → `wl 0.2.0`（发布产物装的），`dpkg -V` 无差异。
+
+## 2026-09-28 · 审查缺陷修复（M6，用户确认）
+
+- **用量刷新状态机**：`usage.New()` 直接进入初始取数状态；`Init()` 不再丢弃模型更新；只有 tick 消息维护唯一每秒循环。手动刷新和设置保存不再额外创建 tick 链。新增请求代次与 `context` 取消，旧请求的迟到结果不能覆盖新请求。
+- **配置诊断与修复**：读取时区分文件缺失、JSON 损坏、文件不可读；JSON 根节点不是对象（包括 `null`）也按损坏处理。设置页修复损坏配置前生成 `.bak`，已有备份递增为 `.bak.1`，无法读取时不会覆盖原路径。
+- **细节与 CLI**：倒计时改用 `math.Ceil`；鼠标只响应左键；`wl` 新增 `--help`/`-h`，未知参数退出码 2。
+- **CI/发布**：新增 push/PR CI（格式、`go mod tidy` 无 diff、vet、单测、race、双架构交叉编译）；发布前执行固定检查；GoReleaser 不再执行 `go mod tidy`。
+
+### 验证 16：静态检查、单测、双架构构建 — PASS（race 受主机限制）
+
+- `gofmt -l .` 无输出；`git diff --check` 无输出；`go mod tidy` 后 `go.mod`/`go.sum` 无 diff；`go vet ./...` 退出码 0。
+- `go test -count=1 ./...`：`cmd/wl`、`internal/app`、`internal/config`、`internal/meta`、`internal/settings`、`internal/usage` 全部 `ok`。
+- `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath ./cmd/wl` 与同参数 `GOARCH=arm64` 均退出码 0。
+- `go test -race -count=1 ./...` 在当前 arm64 主机失败：`FATAL: ThreadSanitizer: unsupported VMA range / Found 39 - Supported 48`。所有包启动 race 前即被 TSAN 拒绝，不是测试断言或竞态报告；CI 的 amd64 runner 会继续执行该检查。
+
+### 验证 17：deb 安装 ＋ 已安装程序复验 — PASS
+
+- `env GOCACHE=/tmp/with-linux-go-cache GOTMPDIR=/tmp VERSION=0.2.1~dev bash scripts/mkdeb.sh arm64` → `dist/with-linux_0.2.1~dev_arm64.deb`。
+- `sudo apt install --reinstall ./dist/with-linux_0.2.1~dev_arm64.deb` → `Unpacking with-linux (0.2.1~dev) over (0.2.0)` / `Setting up with-linux (0.2.1~dev)`。
+- `command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.2.1~dev`；`wl --help` 正常；`dpkg -s` → `install ok installed`；`dpkg -V` 无输出。
+- `sha256sum /usr/bin/wl dist/pkg/wl-linux-arm64`：两处均为 `50b34824ec36c3164e169e8b50e31dfb494f2053b7877193321b10e61c58a26a`。
+- 对已安装的 `/usr/bin/wl` 重跑 `/tmp/wl_smoke.py`：**27/27 PASS**；「关于」显示 `0.2.1~dev / 2026-09-28 / 03e1421-dirty`。
+- 真实配置未被触碰：`~/.config/with-linux/config.json` 仍为 2026-09-25 21:58，md5 `fb8132d26135194262078e243b311ce3`。
+
+### 安全事件遗留
+
+- 当前工作树已不再包含已知旧 key 搜索片段；`git grep` 对这两个具体片段无命中。
+- `git log --all -S...` 证明旧片段仍存在于历史提交 `dcf866e` 的 `PROGRESS.md`。删除当前行不能清除远端历史。**必须轮换对应 API Key**；是否用 `git filter-repo` 重写历史并 force-push 需用户另行确认，本次未执行破坏性 Git 操作。

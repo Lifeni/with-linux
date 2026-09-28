@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -67,10 +68,14 @@ func normWindow(w *rawWindow) *Window {
 
 // fetchOnce 取一次用量。url 参数化便于测试；apiKey 为空不发请求。
 func fetchOnce(client *http.Client, url, apiKey string) Result {
+	return fetchOnceContext(context.Background(), client, url, apiKey)
+}
+
+func fetchOnceContext(ctx context.Context, client *http.Client, url, apiKey string) Result {
 	if apiKey == "" {
 		return Result{Err: ErrNoKey}
 	}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return Result{Err: ErrNetwork}
 	}
@@ -119,9 +124,13 @@ func fetchOnce(client *http.Client, url, apiKey string) Result {
 // fetchWithRetry 一轮取数：最多 FetchAttempts 次，间隔 FetchRetryDelay。
 // NO_KEY / KEY_INVALID / NO_SUB 不重试（与旧实现 fetchWithRetry 一致）。
 func fetchWithRetry(client *http.Client, url, apiKey string) Result {
+	return fetchWithRetryContext(context.Background(), client, url, apiKey)
+}
+
+func fetchWithRetryContext(ctx context.Context, client *http.Client, url, apiKey string) Result {
 	last := Result{Err: ErrNetwork}
 	for i := 0; i < FetchAttempts; i++ {
-		last = fetchOnce(client, url, apiKey)
+		last = fetchOnceContext(ctx, client, url, apiKey)
 		if last.Err == "" {
 			return last
 		}
@@ -129,7 +138,13 @@ func fetchWithRetry(client *http.Client, url, apiKey string) Result {
 			return last
 		}
 		if i < FetchAttempts-1 {
-			time.Sleep(FetchRetryDelay)
+			timer := time.NewTimer(FetchRetryDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return Result{Err: ErrNetwork}
+			case <-timer.C:
+			}
 		}
 	}
 	return last

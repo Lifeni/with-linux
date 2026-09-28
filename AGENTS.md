@@ -13,6 +13,7 @@
 - **运行环境**：Linux（arm64/amd64）目标机，用户通过 SSH 使用；按需启动，**不常驻、不自启、不进 systemd**。
 - **开发方式**：代码放在目标机上（本目录），本地终端只作显示层；改完直接跑，本地不留副本。
 - **配置**：单个 JSON，`$XDG_CONFIG_HOME/with-linux/config.json`（默认 `~/.config/with-linux/config.json`），沿用已有 `apiKey` 字段名。
+- **配置错误语义（2026-09-28 修复）**：文件缺失表示「未配置 Key」；JSON 损坏与文件无法读取必须分别提示，不能伪装成未配置。损坏 JSON 被设置页保存修复前，原文件自动备份为 `config.json.bak`（已有备份时递增为 `.bak.1` 等），不得静默覆盖。
 - **文档体系**：本文件 `AGENTS.md`；复杂流程用 `PLAN.md` / `FINDINGS.md` / `PROGRESS.md` 三件套。
 
 ## 2. 项目章程（用户已确认，2026-09-25；追加见条目内标注）
@@ -49,6 +50,7 @@
 - 数据获取：`GET https://opencode.ai/zen/go/v1/usage`，请求头 `Authorization: Bearer <apiKey>`。取数逻辑、401/403/网络失败文案、重试策略、三列点阵进度格式，实现前先只读调研旧零依赖面板源码并逐条对照移植。
 - 轮询间隔：以旧实现为准（调研确认）；若旧实现未给出，则默认 60 秒且配置可改。
 - 版本与构建信息（2026-09-28 追加）：`version` / `commit` / `date` 由构建时 ldflags 注入（`.goreleaser.yaml` 与 `scripts/mkdeb.sh` 保持一致），缺失时回退 Go 构建信息（模块版本 / `vcs.revision` / `vcs.time`）；「关于」区块展示这些值。
+- CI（2026-09-28 修复）：push/PR 必须跑格式、`go mod tidy` 无 diff、`go vet`、单测、race 与双架构交叉编译；GoReleaser 不得在发布阶段修改 `go.mod`/`go.sum`。
 
 ### 界面布局
 

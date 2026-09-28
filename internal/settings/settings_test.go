@@ -47,6 +47,15 @@ func update(m Model, msg tea.Msg) Model {
 	return nm
 }
 
+func loadKey(t *testing.T) string {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("读取配置失败: %v", err)
+	}
+	return cfg.APIKey
+}
+
 // 固定行号常量必须和实际渲染一致（框架的鼠标命中依赖它）。
 func TestLayoutLineMatchesRender(t *testing.T) {
 	m := newTestModel(t, testKey)
@@ -172,7 +181,7 @@ func TestEnterEditsThenEscCancels(t *testing.T) {
 	if m.Editing() {
 		t.Fatal("Esc 未退出编辑态")
 	}
-	if got := config.Load().APIKey; got != testKey {
+	if got := loadKey(t); got != testKey {
 		t.Fatalf("Esc 后配置被改动: %q", got)
 	}
 	if text, _ := m.StatusText(); text != "" {
@@ -200,7 +209,7 @@ func TestEnterSavesAndReportsSaved(t *testing.T) {
 	if m.Editing() {
 		t.Fatal("保存后仍在编辑态")
 	}
-	if got := config.Load().APIKey; got != testKey {
+	if got := loadKey(t); got != testKey {
 		t.Fatalf("配置 key = %q, want %q", got, testKey)
 	}
 	if cmd == nil {
@@ -228,7 +237,7 @@ func TestSaveEmptyClearsKey(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("清空后未产出 Cmd")
 	}
-	if got := config.Load().APIKey; got != "" {
+	if got := loadKey(t); got != "" {
 		t.Fatalf("清空后配置 key = %q, want 空", got)
 	}
 	if !strings.Contains(m.Lines(80)[apiKeyLine], "(未设置)") {
@@ -259,6 +268,43 @@ func TestSaveFailureShowsError(t *testing.T) {
 	text, sev := m.StatusText()
 	if sev != 2 || !strings.Contains(text, "保存失败") {
 		t.Fatalf("保存失败状态栏 = (%q,%d), want 保存失败/2", text, sev)
+	}
+}
+
+func TestLoadBrokenConfigShowsErrorAndRepairsWithBackup(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", base)
+	if err := os.MkdirAll(filepath.Dir(config.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.Path(), []byte(`{broken`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(meta.Info{})
+	if text, sev := m.StatusText(); sev != 2 || text != "配置损坏" {
+		t.Fatalf("损坏配置状态 = (%q,%d), want 配置损坏/2", text, sev)
+	}
+
+	m = update(m, enter())
+	m.input.SetValue(testKey)
+	nm, cmd := m.Update(enter())
+	m = nm
+	if cmd == nil {
+		t.Fatal("修复损坏配置后未产出 Cmd")
+	}
+	if got := loadKey(t); got != testKey {
+		t.Fatalf("修复后 key = %q, want %q", got, testKey)
+	}
+	if text, _ := m.StatusText(); text != "已保存" {
+		t.Fatalf("修复后状态 = %q, want 已保存", text)
+	}
+	backup, err := os.ReadFile(config.Path() + ".bak")
+	if err != nil {
+		t.Fatalf("未保留损坏配置备份: %v", err)
+	}
+	if string(backup) != `{broken` {
+		t.Fatalf("备份内容 = %q, want 原文件", backup)
 	}
 }
 

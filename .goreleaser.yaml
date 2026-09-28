@@ -4,7 +4,6 @@ project_name: with-linux
 
 before:
   hooks:
-    - go mod tidy
     - go test ./...
 
 builds:

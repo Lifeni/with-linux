@@ -2,8 +2,11 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,13 +28,76 @@ func TestPathDefaultFollowsHome(t *testing.T) {
 func TestLoadMissingAndBroken(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	if got := Load().APIKey; got != "" {
+	cfg, err := Load()
+	if !IsMissing(err) {
+		t.Fatalf("文件缺失错误 = %v, want LoadMissing", err)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("文件缺失错误未包装 fs.ErrNotExist: %v", err)
+	}
+	if got := cfg.APIKey; got != "" {
 		t.Fatalf("文件缺失时 key = %q, want 空", got)
 	}
 
-	os.WriteFile(Path(), []byte(`{broken`), 0o600)
-	if got := Load().APIKey; got != "" {
+	if err := os.MkdirAll(filepath.Dir(Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte(`{broken`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load()
+	var loadErr *LoadError
+	if !errors.As(err, &loadErr) || loadErr.Kind != LoadInvalid {
+		t.Fatalf("坏 JSON 错误 = %v, want LoadInvalid", err)
+	}
+	if got := cfg.APIKey; got != "" {
 		t.Fatalf("坏 JSON 时 key = %q, want 空", got)
+	}
+}
+
+func TestLoadUnreadable(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", base)
+
+	if err := os.MkdirAll(Path(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load()
+	var loadErr *LoadError
+	if !errors.As(err, &loadErr) || loadErr.Kind != LoadUnreadable {
+		t.Fatalf("路径为目录时错误 = %v, want LoadUnreadable", err)
+	}
+}
+
+func TestLoadNullIsInvalid(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `null`)
+
+	_, err := Load()
+	var loadErr *LoadError
+	if !errors.As(err, &loadErr) || loadErr.Kind != LoadInvalid {
+		t.Fatalf("null 配置错误 = %v, want LoadInvalid", err)
+	}
+}
+
+func TestUserMessages(t *testing.T) {
+	cases := []struct {
+		kind  LoadKind
+		long  string
+		short string
+	}{
+		{LoadMissing, "未配置 Key", "未配置"},
+		{LoadInvalid, "配置损坏", "损坏"},
+		{LoadUnreadable, "配置无法读取", "读取失败"},
+	}
+	for _, tc := range cases {
+		err := &LoadError{Kind: tc.kind, Path: "/tmp/config.json", Err: errors.New("cause")}
+		if got := UserMessage(err); got != tc.long {
+			t.Fatalf("kind %d UserMessage = %q, want %q", tc.kind, got, tc.long)
+		}
+		if got := UserShortMessage(err); got != tc.short {
+			t.Fatalf("kind %d UserShortMessage = %q, want %q", tc.kind, got, tc.short)
+		}
 	}
 }
 
@@ -57,7 +123,11 @@ func TestSaveCreatesFile0600(t *testing.T) {
 	if mode := di.Mode().Perm(); mode != 0o700 {
 		t.Fatalf("目录权限 = %o, want 700", mode)
 	}
-	if got := Load().APIKey; got != "oc_sk_abc123" {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("回读配置出错: %v", err)
+	}
+	if got := cfg.APIKey; got != "oc_sk_abc123" {
 		t.Fatalf("回读 key = %q, want oc_sk_abc123", got)
 	}
 }
@@ -70,7 +140,11 @@ func TestSavePreservesUnknownFields(t *testing.T) {
 		t.Fatalf("Save 出错: %v", err)
 	}
 
-	if got := Load().APIKey; got != "new-key" {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.APIKey; got != "new-key" {
 		t.Fatalf("key = %q, want new-key", got)
 	}
 	var fields map[string]json.RawMessage
@@ -96,19 +170,102 @@ func TestSaveEmptyClearsKey(t *testing.T) {
 	if err := Save(""); err != nil {
 		t.Fatalf("清除 key 出错: %v", err)
 	}
-	if got := Load().APIKey; got != "" {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.APIKey; got != "" {
 		t.Fatalf("清除后 key = %q, want 空", got)
 	}
 }
 
-func TestSaveOverwritesBrokenFile(t *testing.T) {
+func TestSaveRepairsBrokenFileWithBackup(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	writeConfig(t, `{broken`)
 	if err := Save("fixed"); err != nil {
 		t.Fatalf("坏文件应能被覆盖，出错: %v", err)
 	}
-	if got := Load().APIKey; got != "fixed" {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.APIKey; got != "fixed" {
 		t.Fatalf("key = %q, want fixed", got)
+	}
+	backup, err := os.ReadFile(Path() + ".bak")
+	if err != nil {
+		t.Fatalf("未生成损坏配置备份: %v", err)
+	}
+	if string(backup) != `{broken` {
+		t.Fatalf("备份内容 = %q, want 原文件", backup)
+	}
+}
+
+func TestSaveRepairsNullFileWithBackup(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `null`)
+
+	if err := Save("fixed"); err != nil {
+		t.Fatalf("null 配置应能被修复，出错: %v", err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.APIKey; got != "fixed" {
+		t.Fatalf("key = %q, want fixed", got)
+	}
+	backup, err := os.ReadFile(Path() + ".bak")
+	if err != nil {
+		t.Fatalf("未生成 null 配置备份: %v", err)
+	}
+	if string(backup) != `null` {
+		t.Fatalf("备份内容 = %q, want null", backup)
+	}
+}
+
+func TestSaveDoesNotOverwriteUnreadableConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(Path(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Save("new-key")
+	if err == nil || !strings.Contains(err.Error(), "读取原配置") {
+		t.Fatalf("路径为目录时 Save 错误 = %v, want 读取原配置", err)
+	}
+	fi, statErr := os.Stat(Path())
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if !fi.IsDir() {
+		t.Fatal("Save 覆盖了不可读的原路径")
+	}
+}
+
+func TestBackupPathsDoNotOverwrite(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `{first`)
+	if err := Save("one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte(`{second`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save("two"); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := os.ReadFile(Path() + ".bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(Path() + ".bak.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != `{first` || string(second) != `{second` {
+		t.Fatalf("备份被覆盖：first=%q second=%q", first, second)
 	}
 }
 

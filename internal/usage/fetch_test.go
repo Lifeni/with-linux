@@ -183,17 +183,33 @@ func TestLoadAPIKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := loadAPIKey(); got != "" {
+	got, err := loadAPIKey()
+	if err != nil {
+		t.Fatalf("文件缺失不应报错: %v", err)
+	}
+	if got != "" {
 		t.Fatalf("文件缺失时 key = %q, want 空", got)
 	}
 
-	os.WriteFile(path, []byte(`{"apiKey":"abc123","fillStyle":"dot"}`), 0o600)
-	if got := loadAPIKey(); got != "abc123" {
+	if err := os.WriteFile(path, []byte(`{"apiKey":"abc123","fillStyle":"dot"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = loadAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "abc123" {
 		t.Fatalf("key = %q, want abc123", got)
 	}
 
-	os.WriteFile(path, []byte(`{broken`), 0o600)
-	if got := loadAPIKey(); got != "" {
+	if err := os.WriteFile(path, []byte(`{broken`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = loadAPIKey()
+	if err == nil {
+		t.Fatal("坏 JSON 应返回错误")
+	}
+	if got != "" {
 		t.Fatalf("坏 JSON 时 key = %q, want 空", got)
 	}
 }

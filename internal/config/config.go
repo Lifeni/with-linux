@@ -1,10 +1,11 @@
 // Package config 读写 with-linux 的配置文件（单个 JSON，见 AGENTS.md「配置」）。
-//
-// 读取行为沿用旧实现：文件缺失或解析失败按空配置处理（旧实现 catch 后返回 {}）。
 package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -13,6 +14,37 @@ import (
 type Config struct {
 	APIKey string `json:"apiKey"`
 }
+
+// LoadKind 区分配置缺失、损坏和无法读取，供界面给出准确提示。
+type LoadKind uint8
+
+const (
+	LoadMissing LoadKind = iota + 1
+	LoadInvalid
+	LoadUnreadable
+)
+
+// LoadError 是读取配置时的分类错误。
+type LoadError struct {
+	Kind LoadKind
+	Path string
+	Err  error
+}
+
+func (e *LoadError) Error() string {
+	switch e.Kind {
+	case LoadMissing:
+		return fmt.Sprintf("配置文件不存在：%s", e.Path)
+	case LoadInvalid:
+		return fmt.Sprintf("配置损坏：%s：%v", e.Path, e.Err)
+	case LoadUnreadable:
+		return fmt.Sprintf("配置无法读取：%s：%v", e.Path, e.Err)
+	default:
+		return fmt.Sprintf("配置读取失败：%s：%v", e.Path, e.Err)
+	}
+}
+
+func (e *LoadError) Unwrap() error { return e.Err }
 
 // Path 返回配置文件路径：$XDG_CONFIG_HOME/with-linux/config.json（默认 ~/.config/with-linux/config.json）。
 func Path() string {
@@ -27,21 +59,76 @@ func Path() string {
 	return filepath.Join(base, "with-linux", "config.json")
 }
 
-// Load 读配置文件。文件缺失或解析失败返回零值，不报错（与旧实现一致）。
-func Load() Config {
+// Load 读配置文件。缺失、损坏和读取失败分别返回带 LoadKind 的错误。
+func Load() (Config, error) {
 	return loadFrom(Path())
 }
 
-func loadFrom(path string) Config {
+func loadFrom(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}
+		kind := LoadUnreadable
+		if errors.Is(err, fs.ErrNotExist) {
+			kind = LoadMissing
+		}
+		return Config{}, &LoadError{Kind: kind, Path: path, Err: err}
 	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		if err == nil {
+			err = errors.New("配置根节点必须是 JSON 对象")
+		}
+		return Config{}, &LoadError{Kind: LoadInvalid, Path: path, Err: err}
+	}
+
 	var cfg Config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return Config{}
+		return Config{}, &LoadError{Kind: LoadInvalid, Path: path, Err: err}
 	}
-	return cfg
+	return cfg, nil
+}
+
+// IsMissing 报告配置是否只是尚未创建。
+func IsMissing(err error) bool {
+	var loadErr *LoadError
+	return errors.As(err, &loadErr) && loadErr.Kind == LoadMissing
+}
+
+// UserMessage 是适合状态栏和面板展示的简短分类文案。
+func UserMessage(err error) string {
+	var loadErr *LoadError
+	if !errors.As(err, &loadErr) {
+		return "配置读取失败"
+	}
+	switch loadErr.Kind {
+	case LoadMissing:
+		return "未配置 Key"
+	case LoadInvalid:
+		return "配置损坏"
+	case LoadUnreadable:
+		return "配置无法读取"
+	default:
+		return "配置读取失败"
+	}
+}
+
+// UserShortMessage 是窄屏状态栏使用的短文案。
+func UserShortMessage(err error) string {
+	var loadErr *LoadError
+	if !errors.As(err, &loadErr) {
+		return "读取失败"
+	}
+	switch loadErr.Kind {
+	case LoadMissing:
+		return "未配置"
+	case LoadInvalid:
+		return "损坏"
+	case LoadUnreadable:
+		return "读取失败"
+	default:
+		return "读取失败"
+	}
 }
 
 // Save 把 apiKey 写回配置文件：读原 JSON → 只改 apiKey → 原样保留其他字段 → 写回。
@@ -59,9 +146,19 @@ func saveTo(path, apiKey string) error {
 	}
 
 	fields := map[string]json.RawMessage{}
-	if raw, err := os.ReadFile(path); err == nil {
-		// 解析失败不阻断保存：按空对象处理，让用户能把文件修回来。
-		_ = json.Unmarshal(raw, &fields)
+	needsBackup := false
+	raw, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+			// 坏 JSON 不应被静默覆盖；先保留原文件再允许用户修复。
+			needsBackup = true
+			fields = map[string]json.RawMessage{}
+		}
+	case errors.Is(err, fs.ErrNotExist):
+		// 首次创建配置，无需备份。
+	default:
+		return fmt.Errorf("读取原配置：%w", err)
 	}
 	keyJSON, err := json.Marshal(apiKey)
 	if err != nil {
@@ -89,9 +186,46 @@ func saveTo(path, apiKey string) error {
 		os.Remove(tmp.Name())
 		return err
 	}
+
+	if needsBackup {
+		backup, err := nextBackupPath(path)
+		if err != nil {
+			os.Remove(tmp.Name())
+			return fmt.Errorf("准备配置备份：%w", err)
+		}
+		if err := os.Rename(path, backup); err != nil {
+			os.Remove(tmp.Name())
+			return fmt.Errorf("备份损坏配置：%w", err)
+		}
+		if err := os.Rename(tmp.Name(), path); err != nil {
+			_ = os.Rename(backup, path)
+			os.Remove(tmp.Name())
+			return fmt.Errorf("写入修复后的配置：%w", err)
+		}
+		return nil
+	}
+
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		os.Remove(tmp.Name())
 		return err
 	}
 	return nil
+}
+
+// nextBackupPath 返回第一个不存在的 .bak 路径，不覆盖历史备份。
+func nextBackupPath(path string) (string, error) {
+	base := path + ".bak"
+	for i := 0; ; i++ {
+		candidate := base
+		if i > 0 {
+			candidate = fmt.Sprintf("%s.%d", base, i)
+		}
+		_, err := os.Lstat(candidate)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return candidate, nil
+		case err != nil:
+			return "", err
+		}
+	}
 }

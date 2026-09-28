@@ -28,7 +28,16 @@ go build -o wl ./cmd/wl
 { "apiKey": "oc_sk_..." }
 ```
 
-配置缺失时面板会提示期望的路径，不会崩溃。
+配置缺失时面板会提示期望的路径，不会崩溃。JSON 损坏或文件无法读取时会显示对应错误；在设置页重新保存 Key 修复损坏文件时，原文件会自动备份为 `.bak`。
+
+日常开发检查：
+
+```bash
+gofmt -l .
+go mod tidy
+go vet ./...
+go test ./...
+```
 
 设计与开发文档见 [AGENTS.md](AGENTS.md)、[PLAN.md](PLAN.md)、[CHANGELOG.md](CHANGELOG.md)。
 

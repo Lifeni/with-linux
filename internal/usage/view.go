@@ -433,16 +433,30 @@ func clampLines(lines []string, width int) []string {
 	return lines
 }
 
-// noKeyLines 是配置缺失时的内容区（A4：提示缺配置及期望路径）。
+// noKeyLines 是配置缺失或错误时的内容区（A4：提示缺配置及期望路径）。
 func (m Model) noKeyLines(width, height int) []string {
-	lines := []string{
-		"",
-		" " + stAmber.Render("未配置 Key"),
-		"",
-		" 请在配置文件里填入 apiKey：",
-		"   " + m.configPath,
-		"",
-		" {\"apiKey\": \"你的 API Key\"}",
+	var lines []string
+	if m.configErr != "" {
+		lines = []string{
+			"",
+			" " + stRed.Render(m.configErr),
+			"",
+			" 请修复配置文件，或在设置页重新保存 API Key：",
+			"   " + m.configPath,
+		}
+		if m.configErr == "配置损坏" {
+			lines = append(lines, "", " 修复保存时，原文件会自动备份为 .bak")
+		}
+	} else {
+		lines = []string{
+			"",
+			" " + stAmber.Render("未配置 Key"),
+			"",
+			" 请在配置文件里填入 apiKey：",
+			"   " + m.configPath,
+			"",
+			" {\"apiKey\": \"你的 API Key\"}",
+		}
 	}
 	for len(lines) < height {
 		lines = append(lines, "")
