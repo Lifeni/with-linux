@@ -4,13 +4,21 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-28
+
 ### Changed
 
 - `scripts/mkdeb.sh`：版本号默认取最近 tag ＋ `~dev`（如 `0.2.0~dev`，显式 `VERSION` 仍可覆盖）；`~` 让本地包排序低于正式版，避免本地包装过之后改回正式版需要 `--allow-downgrades`
+
+### Fixed
+
 - 用量刷新改为单一 tick 循环；手动刷新/保存会取消旧请求并立即发起新请求，迟到的旧响应不会覆盖新状态
-- 配置文件缺失、JSON 损坏、读取失败分开提示；修复损坏 JSON 前自动保留 `.bak` 备份，不再静默覆盖
+- 配置文件缺失、JSON 损坏、读取失败分开提示；修复损坏 JSON 前自动保留 `.bak` 备份，不再静默覆盖，并处理 JSON 根节点为 `null` 的边界情况
 - 刷新倒计时改用向上取整，与旧 JS 实现的 `Math.ceil` 一致
 - 鼠标点击只响应左键，右键不再误切 tab 或进入设置编辑态
+
+### Added
+
 - 增加 push/PR CI（格式、模块文件、vet、单测、race、双架构交叉编译）；发布前执行同样的固定检查，GoReleaser 不再运行 `go mod tidy`
 - `wl` 新增 `--help`/`-h`，未知参数给出错误与帮助并以退出码 2 结束
 
@@ -67,6 +75,7 @@
 - 配置：`$XDG_CONFIG_HOME/with-linux/config.json`（默认 `~/.config/with-linux/config.json`），`apiKey` 字段
 - 交付：单一可执行文件，全静态交叉编译 `linux/amd64` ＋ `linux/arm64`
 
+[0.2.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.2.0
 [0.1.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.1.0
