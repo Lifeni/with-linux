@@ -1,0 +1,205 @@
+/* with-linux 官网样式（无 JS，纯 CSS/HTML）。
+   骨架参考 with-design.dist.run：body 纵向靠底、底部一条 info/actions 栏。
+   背景是 dots.svg（由 scripts/gen-web-dots 生成，与 TUI 同一套哈希）当 mask 用：
+   只提供"哪里有点、有多亮"，颜色由下面的 --dot 给，于是一张图同时适配亮暗色。 */
+
+/* 字体：DejaVu Sans Mono —— 多数 Linux 发行版自带的代码字体。
+   local() 命中就不下载；没装的系统走仓库里的 woff2（ASCII 子集，各约 11KB）。
+   中文没有等宽覆盖，靠后面的 CJK 等宽字体兜底。 */
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("DejaVu Sans Mono"), url("fonts/dejavu-sans-mono-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("DejaVu Sans Mono Bold"), local("DejaVu Sans Mono"),
+    url("fonts/dejavu-sans-mono-700.woff2") format("woff2");
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* 西文用仓库里带的 DejaVu Sans Mono；中文按 with-design 那套后备走一遍
+     （等宽中文优先，然后才是 MiSans / HarmonyOS / 思源这些通用字体）。 */
+  --mono: "DejaVu Sans Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Sarasa Mono SC", "Noto Sans Mono CJK SC", "Source Han Mono SC",
+    "WenQuanYi Zen Hei Mono", "MiSans", "HarmonyOS Sans SC", "Source Han Sans SC",
+    "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", "Helvetica Neue",
+    system-ui, sans-serif, monospace;
+
+  --bg: #fafaf8;
+  --fg: #14161a;
+  --muted: #4a515c;
+
+  --dot: #5f87af;
+  --accent: #5f87af;
+  --accent-fg: #ffffff;
+  --btn-line: rgba(20, 22, 26, 0.22);
+  --btn-hover: rgba(20, 22, 26, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1114;
+    --fg: #eceff3;
+    --muted: #a7b0bb;
+
+    --dot: #8fb2d6;
+    --accent: #8fb2d6;
+    --accent-fg: #0e1114;
+    --btn-line: rgba(236, 239, 243, 0.28);
+    --btn-hover: rgba(236, 239, 243, 0.1);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  /* 靠底排布：内容整体压在页面最下面 */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* —— 背景点阵：dots.svg 当 mask，颜色由 --dot 决定 ——
+   高度铺满屏幕（于是行数固定、不随窗口比例拉伸），宽度按比例；底边对齐，
+   太宽时向左重复——重复只发生在比点阵还宽的屏幕上。 */
+.bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--dot);
+  -webkit-mask-image: url("dots.svg");
+  -webkit-mask-size: auto 100%;
+  -webkit-mask-position: bottom left;
+  -webkit-mask-repeat: repeat-x;
+  mask-image: url("dots.svg");
+  mask-size: auto 100%;
+  mask-position: bottom left;
+  mask-repeat: repeat-x;
+}
+
+/* —— 底部信息栏 —— */
+.bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+  padding: clamp(20px, 4vw, 32px);
+}
+
+.info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.version {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 20px;
+  border: 1px solid var(--btn-line);
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.95rem;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+
+.btn:hover { background: var(--btn-hover); }
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.btn--primary:hover {
+  background: var(--accent);
+  opacity: 0.88;
+}
+
+/* Remix Icon 的图标是填充式的 24 格画布 */
+.ico {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: currentColor;
+}
+
+@media (max-width: 620px) {
+  .bar { padding: 16px; }
+  .logo { width: 36px; height: 36px; }
+  .actions { width: 100%; }
+  .btn { flex: 1; height: 44px; padding: 0 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+}
