@@ -51,15 +51,15 @@ func settingsLines(m Model) []string {
 	return m.settings.Lines(m.width)
 }
 
-// apiKeyLine 是 API Key 行在**内容区**（含框架的垂直居中偏移）里的行号，供鼠标命中测试用。
+// apiKeyLine 是 OpenCode Key 行在**内容区**（含框架的垂直居中偏移）里的行号，供鼠标命中测试用。
 func apiKeyLine(t *testing.T, m Model) int {
 	t.Helper()
 	for i, l := range settingsLines(m) {
-		if strings.Contains(l, "API Key") {
+		if strings.Contains(l, "OpenCode Key") {
 			return m.contentOffset() + i
 		}
 	}
-	t.Fatal("设置页找不到 API Key 行")
+	t.Fatal("设置页找不到 OpenCode Key 行")
 	return -1
 }
 
@@ -330,7 +330,7 @@ func TestSettingsMouseClickEntersEdit(t *testing.T) {
 
 	// 内容区第 0 行（tab 行下第一行）不对应可编辑行，不进入编辑
 	if row == 0 {
-		t.Fatalf("测试前提不成立：API Key 行号 = 0")
+		t.Fatalf("测试前提不成立：OpenCode Key 行号 = 0")
 	}
 	nm, _ := m.Update(tea.MouseClickMsg{X: 5, Y: 1, Button: tea.MouseLeft})
 	if nm.(Model).settings.Editing() {

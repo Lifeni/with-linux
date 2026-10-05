@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed
+
+- 设置页第一行 key 标签 `API Key` → `OpenCode Key`（与 `Command Code Key` 对称）
+
 ## [0.3.0] - 2026-10-05
 
 ### Added

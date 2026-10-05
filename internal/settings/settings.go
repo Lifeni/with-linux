@@ -46,7 +46,7 @@ const (
 
 // 行标签。
 const (
-	labelAPIKey      = "API Key"
+	labelAPIKey      = "OpenCode Key"
 	labelCommandCode = "Command Code Key"
 	labelConfig      = "配置文件"
 	labelSection     = "关于"

@@ -316,7 +316,7 @@ func TestClickLineEntersEditOnlyOnAPIKeyRow(t *testing.T) {
 		t.Fatal("点上边框进入了编辑态")
 	}
 	if got := m.ClickLine(apiKeyLine); !got.Editing() {
-		t.Fatal("点 API Key 行未进入编辑态")
+		t.Fatal("点 OpenCode Key 行未进入编辑态")
 	}
 }
 

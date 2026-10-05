@@ -65,7 +65,7 @@ func (m Model) noKeyLines(width, height int) []string {
 			"",
 			" " + stRed.Render(m.configErr),
 			"",
-			" 请修复配置文件，或在设置页重新保存 API Key：",
+			" 请修复配置文件，或在设置页重新保存 OpenCode Key：",
 			"   " + m.configPath,
 		}
 		if m.configErr == "配置损坏" {
