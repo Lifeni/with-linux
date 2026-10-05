@@ -366,3 +366,20 @@ ok  	with-linux/internal/app	0.093s
 - `gofmt -l .` 无输出；`go vet ./...` 干净；`go test -count=1 ./...` 全 `ok`（新增 `TestMigrateLegacyAPIKey`、`TestMigrateNoopWhenMissingOrAlreadyNew`、`TestSaveDropsLegacyAPIKey`、`TestShortNamesAreDistinct`）。
 - 重打包 `0.3.0~dev`、`sudo apt install --reinstall`；对已安装 `/usr/bin/wl` 跑 pty 冒烟：**37/37 PASS**（三标签含 `[Command Code 用量]`、**旧 `apiKey` 启动自动迁移为 `openCodeApiKey`**、设置页两行 key、Command Code Key 写回且不动 OpenCode key、`q` 退出码 0）。
 - 真实配置未被触碰（冒烟用临时 `XDG_CONFIG_HOME`）。
+
+### 发布 v0.3.0（2026-10-05，用户指令）
+
+- 版本决策：本次是新增功能（Command Code 页、配置字段改名＋自动迁移）→ 按语义化版本 `0.2.1` → **`0.3.0`**（minor）。
+- 发布前收尾：README 功能段加 Command Code；`scripts/deb-control.in` 描述改为两个用量页；CHANGELOG `[Unreleased]` → `## [0.3.0] - 2026-10-05` ＋ 底部 tag 链接；PLAN 状态更新为「M0–M7 完成并发布 v0.3.0」；`.gitignore` 加 `.commandcode/`（AI 助手本地状态）。
+- 提交：`5cd4843 feat: 新增 Command Code 用量页，配置字段按提供商区分（A6）`（28 files changed, +2212 −612）；`git push origin main`（`a242151..5cd4843`）。
+- 打 tag：`git tag -a v0.3.0 -m v0.3.0` ＋ `git push origin v0.3.0`。
+
+### 验证 22：发版全链路 — PASS
+
+- push CI run **37320894422** → `completed / success`（格式、模块文件、vet、单测、race、双架构交叉编译）。
+- Release workflow run **37321182644**（`v0.3.0`）→ `completed / success`（1m5s）。
+- Release：https://github.com/Lifeni/with-linux/releases/tag/v0.3.0（`draft=false`、`prerelease=false`）。产物齐全：`with-linux-linux-{amd64,arm64}.tar.gz`、`with-linux_0.3.0_{amd64,arm64}.deb`、`with-linux_0.3.0_{amd64,arm64}.rpm`、`checksums.txt`。
+- 下载 `with-linux_0.3.0_arm64.deb`：sha256 `29ab56c0…`，与 `checksums.txt` 同值（MATCH）；`dpkg-deb --info` → `Package: with-linux` / `Version: 0.3.0` / `Architecture: arm64`。
+- 用发布产物 `sudo apt install --reinstall`：`Unpacking with-linux (0.3.0) over (0.3.0~dev)` / `Setting up with-linux (0.3.0)`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.3.0`；`dpkg -V` 无输出。
+- 对已安装的 `/usr/bin/wl` 跑 pty 冒烟：**37/37 PASS**；「关于」显示 `版本 0.3.0` / `构建日期 2026-10-05` / `提交 5cd4843`。
+- 备注：`gh auth status` 报 token invalid，但 git push（经 `gh auth git-credential`）与 `gh run` / `gh release` 查询均正常，属误报，未影响本次发布。
