@@ -1,5 +1,5 @@
-// Package settings 是「设置」页：编辑写回配置文件的 apiKey，并展示「关于」构建信息。
-// 规格见 AGENTS.md「界面布局 · 设置页」（2026-09-28 追加，属范围扩张）。
+// Package settings 是「设置」页：编辑写回配置文件的 apiKey / commandCodeApiKey，并展示「关于」构建信息。
+// 规格见 AGENTS.md「界面布局 · 设置页」（2026-09-28 追加；Command Code Key 2026-10-05 追加）。
 package settings
 
 import (
@@ -14,42 +14,48 @@ import (
 	"github.com/Lifeni/with-linux/internal/meta"
 )
 
-// SavedMsg 在配置写回成功后由 Update 产出；框架收到后转成用量刷新。
-// 让 settings 不直接依赖 usage：翻译放在框架层。
-type SavedMsg struct{}
+// SavedMsg 在配置写回成功后由 Update 产出；框架收到后转成对应用量页的刷新。
+// CommandCode 报告改的是 commandCodeApiKey（true）还是 apiKey（false）。
+// 让 settings 不直接依赖 usage / cmdusage：翻译放在框架层。
+type SavedMsg struct {
+	CommandCode bool
+}
 
-// 可编辑行索引。当前只有 API Key；以后加设置项在这里追加，并在 Lines 里加一行。
+// 可编辑行索引。以后加设置项在这里追加，并在 innerLines 里加一行。
 const (
 	rowAPIKey = iota
+	rowCommandCode
 	editableRows
 )
 
 // 框内固定行号（自 0 起，与 innerLines 的拼装顺序一致；TestLayoutLineMatchesRender 盯着它）。
 const (
-	innerTitle    = 0
-	innerAPIKey   = 2
-	innerConfig   = 3
-	innerSection  = 5
-	innerVersion  = 6
-	innerDate     = 7
-	innerCommit   = 8
-	innerGo       = 9
-	innerPlatform = 10
-	innerRepo     = 11
-	innerRows     = 12
+	innerTitle       = 0
+	innerAPIKey      = 2
+	innerCommandCode = 3
+	innerConfig      = 4
+	innerSection     = 6
+	innerVersion     = 7
+	innerDate        = 8
+	innerCommit      = 9
+	innerGo          = 10
+	innerPlatform    = 11
+	innerRepo        = 12
+	innerRows        = 13
 )
 
 // 行标签。
 const (
-	labelAPIKey   = "API Key"
-	labelConfig   = "配置文件"
-	labelSection  = "关于"
-	labelVersion  = "版本"
-	labelDate     = "构建日期"
-	labelCommit   = "提交"
-	labelGo       = "Go"
-	labelPlatform = "平台"
-	labelRepo     = "仓库"
+	labelAPIKey      = "API Key"
+	labelCommandCode = "Command Code Key"
+	labelConfig      = "配置文件"
+	labelSection     = "关于"
+	labelVersion     = "版本"
+	labelDate        = "构建日期"
+	labelCommit      = "提交"
+	labelGo          = "Go"
+	labelPlatform    = "平台"
+	labelRepo        = "仓库"
 )
 
 // gutterW 是可编辑行的选择标记宽度（"▸ " 或两个空格）。
@@ -78,7 +84,8 @@ var (
 type Model struct {
 	info       meta.Info
 	configPath string
-	key        string // 已保存的 key（明文；渲染时掩码）
+	key        string // 已保存的 OpenCode key（明文；渲染时掩码）
+	keyCC      string // 已保存的 Command Code key（明文；渲染时掩码）
 
 	input    textinput.Model
 	editing  bool
@@ -127,7 +134,7 @@ func (m Model) StatusText() (text string, severity int) {
 	case m.loadErr != "":
 		return m.loadErr, 2
 	case m.editing:
-		if m.input.Value() != m.key {
+		if m.input.Value() != m.keyFor(m.selected) {
 			return "未保存（Enter 保存 · Esc 取消）", 1
 		}
 		return "编辑中", 0
@@ -145,7 +152,7 @@ func (m Model) ShortStatusText() string {
 	case m.loadErr != "":
 		return "配置错误"
 	case m.editing:
-		if m.input.Value() != m.key {
+		if m.input.Value() != m.keyFor(m.selected) {
 			return "未保存"
 		}
 		return "编辑中"
@@ -187,18 +194,46 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // ClickLine 处理内容区第 line 行（0 起、自然高度里的行号）的鼠标点击：
 // 点在可编辑行上即进入编辑。框架负责把终端行换算成这里的行号（含滚动与居中偏移）。
 func (m Model) ClickLine(line int) Model {
-	if m.editing || line != apiKeyLine {
+	if m.editing {
+		return m
+	}
+	switch line {
+	case apiKeyLine:
+		m.selected = rowAPIKey
+	case commandCodeKeyLine:
+		m.selected = rowCommandCode
+	default:
 		return m
 	}
 	nm, _ := m.beginEdit()
 	return nm
 }
 
+// keyFor / setKey 按行索引读写对应的 key。
+func (m Model) keyFor(row int) string {
+	if row == rowCommandCode {
+		return m.keyCC
+	}
+	return m.key
+}
+
+func (m *Model) setKey(row int, val string) {
+	if row == rowCommandCode {
+		m.keyCC = val
+		return
+	}
+	m.key = val
+}
+
 func (m Model) beginEdit() (Model, tea.Cmd) {
 	m.editing = true
 	m.saveErr = ""
 	m.saved = false
-	m.input.SetValue(m.key)
+	m.input.Placeholder = "oc_sk_…"
+	if m.selected == rowCommandCode {
+		m.input.Placeholder = "user_…"
+	}
+	m.input.SetValue(m.keyFor(m.selected))
 	m.input.CursorEnd()
 	return m, m.input.Focus()
 }
@@ -207,38 +242,47 @@ func (m Model) cancel() (Model, tea.Cmd) {
 	m.editing = false
 	m.input.Blur()
 	m.saveErr = ""
-	m.input.SetValue(m.key)
+	m.input.SetValue(m.keyFor(m.selected))
 	return m, nil
 }
 
 func (m Model) save() (Model, tea.Cmd) {
 	val := strings.TrimSpace(m.input.Value())
-	if err := config.Save(val); err != nil {
+	row := m.selected
+	var err error
+	if row == rowCommandCode {
+		err = config.SaveCommandCodeAPIKey(val)
+	} else {
+		err = config.Save(val)
+	}
+	if err != nil {
 		m.saveErr = err.Error()
 		return m, nil
 	}
-	m.key = val
+	m.setKey(row, val)
 	m.editing = false
 	m.input.Blur()
 	m.loadErr = ""
 	m.saveErr = ""
 	m.saved = true
 	m.input.SetValue(val)
-	return m, func() tea.Msg { return SavedMsg{} }
+	return m, func() tea.Msg { return SavedMsg{CommandCode: row == rowCommandCode} }
 }
 
 func (m Model) reloadConfig() Model {
 	cfg, err := config.Load()
 	m.loadErr = ""
 	m.key = ""
+	m.keyCC = ""
 	switch {
 	case err == nil:
-		m.key = cfg.APIKey
+		m.key = cfg.OpenCodeAPIKey
+		m.keyCC = cfg.CommandCodeAPIKey
 	case config.IsMissing(err):
 	default:
 		m.loadErr = config.UserMessage(err)
 	}
-	m.input.SetValue(m.key)
+	m.input.SetValue(m.keyFor(m.selected))
 	return m
 }
 
@@ -257,7 +301,7 @@ func maskKey(key string) string {
 // innerLines 渲染线框内的内容行（不含边框与居中留白），行数恒为 innerRows。
 func (m Model) innerLines(width int) []string {
 	labelW := 0
-	for _, l := range []string{labelAPIKey, labelConfig, labelVersion, labelDate, labelCommit, labelGo, labelPlatform, labelRepo} {
+	for _, l := range []string{labelAPIKey, labelCommandCode, labelConfig, labelVersion, labelDate, labelCommit, labelGo, labelPlatform, labelRepo} {
 		if w := runewidth.StringWidth(l); w > labelW {
 			labelW = w
 		}
@@ -280,27 +324,25 @@ func (m Model) innerLines(width int) []string {
 		return gutter + labelS + strings.Repeat(" ", labelW-runewidth.StringWidth(label)+2) + valueS
 	}
 
-	var keyLine string
-	if m.editing {
-		in := m.input
-		in.SetWidth(avail)
-		gutter := "  "
-		if m.selected == rowAPIKey {
-			gutter = "▸ "
+	// editable 渲染一个可编辑行：编辑态且选中该行时显示输入框，否则显示掩码值。
+	editable := func(label, value string, rowIdx int) string {
+		if m.editing && m.selected == rowIdx {
+			in := m.input
+			in.SetWidth(avail)
+			return "▸ " + stSelect.Render(label) +
+				strings.Repeat(" ", labelW-runewidth.StringWidth(label)+2) + in.View()
 		}
-		keyLine = gutter + stSelect.Render(labelAPIKey) +
-			strings.Repeat(" ", labelW-runewidth.StringWidth(labelAPIKey)+2) + in.View()
-	} else {
-		keyLine = row(labelAPIKey, maskKey(m.key), m.selected == rowAPIKey)
+		return row(label, maskKey(value), m.selected == rowIdx)
 	}
 
 	return []string{
-		stTitle.Render("设置"), // innerTitle
-		"",                   // 空行
-		keyLine,              // innerAPIKey
-		row(labelConfig, m.configPath, false),
+		stTitle.Render("设置"),                    // innerTitle
+		"",                                      // 空行
+		editable(labelAPIKey, m.key, rowAPIKey), // innerAPIKey
+		editable(labelCommandCode, m.keyCC, rowCommandCode), // innerCommandCode
+		row(labelConfig, m.configPath, false),               // innerConfig
 		"",
-		stSection.Render(labelSection),
+		stSection.Render(labelSection), // innerSection
 		row(labelVersion, m.info.Version, false),
 		row(labelDate, m.info.Date, false),
 		row(labelCommit, m.info.Commit, false),
@@ -322,6 +364,9 @@ func (m Model) Lines(width int) []string {
 	return strings.Split(box, "\n")
 }
 
-// apiKeyLine 是内容区（自然高度、行号自 0 起）里 API Key 行的行号：
+// apiKeyLine / commandCodeKeyLine 是内容区（自然高度、行号自 0 起）里可编辑行的行号：
 // 上边框 + 上内边距 + 框内行。鼠标命中用它，恒为常量。
-const apiKeyLine = 2 + innerAPIKey
+const (
+	apiKeyLine         = 2 + innerAPIKey
+	commandCodeKeyLine = 2 + innerCommandCode
+)

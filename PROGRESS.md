@@ -320,3 +320,49 @@ ok  	with-linux/internal/app	0.093s
 - 用 Release 产物执行 `sudo apt install --reinstall`：`Unpacking with-linux (0.2.1) over (0.2.1~dev)` / `Setting up with-linux (0.2.1)`；`/usr/bin/wl --version` → `wl 0.2.1`；`--help` 正常；`dpkg -V with-linux` 无输出；`sha256sum /usr/bin/wl` → `360ca0f65f329655f55265c02e0b25459627afa0dfb6bb8cc0fb52c0c3d01815`。
 - 对已安装的 `/usr/bin/wl` 运行 PTY 冒烟：**27/27 PASS**；「关于」显示 `版本 0.2.1`、`构建日期 2026-09-28`、`提交 6e13b12`、`Go go1.27.1`、`平台 linux/arm64`。冒烟使用 `/tmp/wl-smoke/with-linux/config.json`，未读取真实配置。
 - Release workflow 仍有 Node.js 20 弃用告警（`checkout@v4` / `setup-go@v5` / `goreleaser-action@v6` 被强制运行在 Node 24），不影响本次产物与验证结果。
+
+## 2026-10-05 · Command Code 用量页（用户指令；范围扩张已确认，验收 A6）
+
+- 指令原文：「我想加两个功能，分别是 commandCode 的用量显示和 mimotokenplan 的用量显示，你先调研一下支不支持」→ 调研后用户：「先做 commandcode」。
+- **调研结论**：Command Code 有可用端点（`Authorization: Bearer <key>`）；MiMo TokenPlan 只有小米账号 Cookie 登录态、无 API key，暂缓（见 `FINDINGS.md` §6 与对话记录）。
+- 用户拍板：key 来源＝**只用 with-linux 配置文件**新增的 `commandCodeApiKey`；允许只读探测真实端点；用量页**复用三列点阵**。
+- **范围扩张**：先改章程（`AGENTS.md`：`A6`、约束「数据获取（Command Code）」、界面布局 tab 栏与设置页），再实现。
+- 实现：
+  - `internal/config`：加 `CommandCodeAPIKey` 字段 ＋ `SaveCommandCodeAPIKey`；`saveTo` 抽成通用 `saveField(path, field, value)`。
+  - `internal/gauge`（新）：三列点阵渲染从 `usage/view.go` 抽成共享包（`Window`/`Panel`/`Render`/`ClampLines`）。
+  - `internal/usage`：`view.go` 瘦成「映射 + 调 gauge」，行为不变；纯渲染测试迁到 `gauge` 包。
+  - `internal/cmdusage`（新）：`fetch.go`（四端点、容错、重试）、`model.go`（轮询/倒计时/文案，对齐 usage）、`view.go`、`config.go`。
+  - `internal/settings`：加 `Command Code Key` 行（同一 textinput 复用，按选中行读写对应字段）；`SavedMsg{CommandCode bool}`。
+  - `internal/app`：`tabCmdUsage` 插在中间；标签三个；`SavedMsg` 按标志刷新对应页面；两个用量页同时收 tick。
+
+### 验证 19：单测 ＋ 静态检查 ＋ 双架构 — PASS
+
+- `gofmt -l .` 无输出；`go vet ./...` 干净；`go mod tidy` 后 `go.mod`/`go.sum` 无 diff。
+- `go test -count=1 ./...`：`cmd/wl`、`internal/{app,cmdusage,config,gauge,meta,settings,usage}` 全 `ok`。
+- `CGO_ENABLED=0 GOOS=linux GOARCH={amd64,arm64} go build -trimpath ./cmd/wl`：两产物 `file` 均 `statically linked`（x86-64 / ARM aarch64）。
+
+### 验证 20：deb 安装 ＋ 装后 pty 冒烟 ＋ 真实 key 实测 — PASS
+
+- `VERSION=0.3.0~dev bash scripts/mkdeb.sh arm64` → `dist/with-linux_0.3.0~dev_arm64.deb`（`Package: with-linux`，内含 `./usr/bin/wl`）。
+- `sudo apt install --reinstall ./dist/with-linux_0.3.0~dev_arm64.deb` → `Setting up with-linux (0.3.0~dev)`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.3.0~dev`。
+- 对已安装的 `/usr/bin/wl` 跑 pty 冒烟（`XDG_CONFIG_HOME` 指向临时目录，不碰真实配置）：**36/36 PASS**（三标签、Command Code 未配置提示、设置页两行 key、Command Code Key 保存写回且不动 apiKey、q 退出码 0）。
+- 真实 key 只读实测：Command Code 页渲染 `5h [16%] 1h14m / Week [8%] 6d20h / Month [5%] 30d20h`，状态 `60s 后刷新`；与 `used/cap`、`used/(used+remaining)` 吻合。
+- 真实配置未被触碰：`~/.config/with-linux/config.json` 仍为 2026-09-28，md5 `9e895b8f…`。
+
+### 冒烟发现的回归（已修）
+
+- 首次对真实 key 冒烟时 `cmdusage.Model.panel()` 在「已配置 key 但首帧数据未到（`data==nil`）」时**空指针崩溃**。根因：`panel()` 直接解引用 `m.data`（`usage` 版走 `window()` 有空判）。修复：`panel()` 对 nil data 全按无数据；补回归测试 `TestLinesWithKeyButNoData`。修复后重打包重装，冒烟与真实实测复跑通过。
+
+### 后续调整（同日，用户指令）
+
+- 指令：「tab 页都加上用量两个字，然后配置文件的字段区分一下两个提供商」；随后补充「不用考虑向后兼容和旧配置，而是在打开新版时自动迁移配置」。
+- tab 标签改为 `OpenCode Go 用量` / `Command Code 用量` / `设置`；`shortName` 改为「取最后一个空格分隔词，重名时退到两个词」→ 两个用量页短名为 `Go 用量` / `Code 用量`；`tabLayoutFor` 的命中区间按终端宽度钳制（极窄终端下单个标签可能比终端还宽）。
+- 配置字段按提供商区分：`apiKey` → `openCodeApiKey`（与 `commandCodeApiKey` 并列）；**读路径不做兼容回退**。
+- 新增 `config.Migrate()`：启动时把旧 `apiKey` 一次性改写为 `openCodeApiKey` 并删除旧字段（保留未知字段）；无该字段、文件缺失或 JSON 损坏时不动作。`cmd/wl` 的 `runTUI` 在 `app.New` 之前调用它（best-effort，失败不阻断启动）。
+- `internal/config`：写入逻辑拆成 `readFields` / `writeFields` / `saveField`，供保存与迁移复用；`Save` 保存 OpenCode key 时顺带删除旧 `apiKey`。
+
+### 验证 21：单测 ＋ 装后冒烟（含迁移端到端） — PASS
+
+- `gofmt -l .` 无输出；`go vet ./...` 干净；`go test -count=1 ./...` 全 `ok`（新增 `TestMigrateLegacyAPIKey`、`TestMigrateNoopWhenMissingOrAlreadyNew`、`TestSaveDropsLegacyAPIKey`、`TestShortNamesAreDistinct`）。
+- 重打包 `0.3.0~dev`、`sudo apt install --reinstall`；对已安装 `/usr/bin/wl` 跑 pty 冒烟：**37/37 PASS**（三标签含 `[Command Code 用量]`、**旧 `apiKey` 启动自动迁移为 `openCodeApiKey`**、设置页两行 key、Command Code Key 写回且不动 OpenCode key、`q` 退出码 0）。
+- 真实配置未被触碰（冒烟用临时 `XDG_CONFIG_HOME`）。

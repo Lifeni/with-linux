@@ -4,7 +4,7 @@ package usage
 
 import "github.com/Lifeni/with-linux/internal/config"
 
-// loadAPIKey 读配置文件里的 apiKey，并把缺失、损坏和读取失败分开返回。
+// loadAPIKey 读配置文件里的 openCodeApiKey，并把缺失、损坏和读取失败分开返回。
 func loadAPIKey() (string, error) {
 	cfg, err := config.Load()
 	if config.IsMissing(err) {
@@ -13,5 +13,5 @@ func loadAPIKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return cfg.APIKey, nil
+	return cfg.OpenCodeAPIKey, nil
 }

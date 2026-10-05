@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 )
 
-// Config 是配置文件的内容。目前只有一个字段，未知字段由 Save 原样保留。
+// Config 是配置文件的内容。未知字段由 Save 原样保留。
+// 字段按提供商区分：openCodeApiKey（OpenCode Go 用量）与 commandCodeApiKey（Command Code）。
 type Config struct {
-	APIKey string `json:"apiKey"`
+	OpenCodeAPIKey    string `json:"openCodeApiKey"`
+	CommandCodeAPIKey string `json:"commandCodeApiKey"`
 }
 
 // LoadKind 区分配置缺失、损坏和无法读取，供界面给出准确提示。
@@ -131,41 +133,59 @@ func UserShortMessage(err error) string {
 	}
 }
 
-// Save 把 apiKey 写回配置文件：读原 JSON → 只改 apiKey → 原样保留其他字段 → 写回。
+// Save 把 OpenCode Go 的 key 写回配置文件（字段 openCodeApiKey）：读原 JSON → 只改该字段
+// → 原样保留其他字段 → 写回，并删除旧的通用 apiKey。
 // 目录不存在时按 0700 创建；文件权限 0600（key 是敏感信息）。写临时文件再 rename，避免写坏原文件。
-// 空字符串等于清除 key（写入 "apiKey": ""）。
+// 空字符串等于清除 key。
 func Save(apiKey string) error {
-	path := Path()
-	return saveTo(path, apiKey)
+	return saveField(Path(), "openCodeApiKey", apiKey, "apiKey")
 }
 
-func saveTo(path, apiKey string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+// SaveCommandCodeAPIKey 把 commandCodeApiKey 写回配置文件，语义与 Save 完全一致（只改这一个字段）。
+func SaveCommandCodeAPIKey(apiKey string) error {
+	return saveField(Path(), "commandCodeApiKey", apiKey)
+}
+
+func saveField(path, field, apiKey string, drop ...string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-
-	fields := map[string]json.RawMessage{}
-	needsBackup := false
-	raw, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
-			// 坏 JSON 不应被静默覆盖；先保留原文件再允许用户修复。
-			needsBackup = true
-			fields = map[string]json.RawMessage{}
-		}
-	case errors.Is(err, fs.ErrNotExist):
-		// 首次创建配置，无需备份。
-	default:
-		return fmt.Errorf("读取原配置：%w", err)
+	fields, needsBackup, err := readFields(path)
+	if err != nil {
+		return err
 	}
 	keyJSON, err := json.Marshal(apiKey)
 	if err != nil {
 		return err
 	}
-	fields["apiKey"] = keyJSON
+	fields[field] = keyJSON
+	for _, d := range drop {
+		delete(fields, d)
+	}
+	return writeFields(path, fields, needsBackup)
+}
 
+// readFields 读原配置为字段表。文件缺失返回空表；JSON 损坏（含根节点不是对象）返回空表并
+// 标 needsBackup=true（调用方保存时会先把原文件备份成 .bak，不静默覆盖）；
+// 文件无法读取（如路径是目录）返回错误。
+func readFields(path string) (fields map[string]json.RawMessage, needsBackup bool, err error) {
+	raw, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+			return map[string]json.RawMessage{}, true, nil
+		}
+		return fields, false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return map[string]json.RawMessage{}, false, nil
+	default:
+		return nil, false, fmt.Errorf("读取原配置：%w", err)
+	}
+}
+
+// writeFields 把字段表缩进写回（文件 0600，写临时文件再 rename）；needsBackup 时先把原文件备份为 .bak。
+func writeFields(path string, fields map[string]json.RawMessage, needsBackup bool) error {
+	dir := filepath.Dir(path)
 	out, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return err
@@ -210,6 +230,28 @@ func saveTo(path, apiKey string) error {
 		return err
 	}
 	return nil
+}
+
+// Migrate 打开新版时把旧配置里通用的 apiKey 一次性迁移为 openCodeApiKey。
+// 无该字段、文件缺失或 JSON 损坏时不做任何事；返回的错误仅用于告知，不阻断启动。
+func Migrate() error {
+	return migrateAt(Path())
+}
+
+func migrateAt(path string) error {
+	fields, needsBackup, err := readFields(path)
+	if err != nil || needsBackup {
+		return nil // 读不动或已损坏：交给界面提示，不在此处理
+	}
+	old, ok := fields["apiKey"]
+	if !ok {
+		return nil
+	}
+	if _, has := fields["openCodeApiKey"]; !has {
+		fields["openCodeApiKey"] = old
+	}
+	delete(fields, "apiKey")
+	return writeFields(path, fields, false)
 }
 
 // nextBackupPath 返回第一个不存在的 .bak 路径，不覆盖历史备份。

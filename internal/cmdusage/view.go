@@ -1,4 +1,4 @@
-package usage
+package cmdusage
 
 import (
 	"charm.land/lipgloss/v2"
@@ -6,38 +6,23 @@ import (
 	"github.com/Lifeni/with-linux/internal/gauge"
 )
 
-// 列顺序与标签（旧实现 ORDER / LABELS）；点阵排版已抽到 internal/gauge 共享。
-var (
-	order  = []string{"rolling", "weekly", "monthly"}
-	labels = map[string]string{"rolling": "5h", "weekly": "Week", "monthly": "Month"}
-)
+// 三列标签：5 小时窗 / 每周窗 / 月度额度（与 OpenCode 页同一套点阵排版）。
+var labels = [3]string{"5h", "Week", "Month"}
 
 var (
 	stAmber = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
 	stRed   = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
 )
 
-func (d *Data) window(k string) *Window {
-	if d == nil {
-		return nil
-	}
-	switch k {
-	case "rolling":
-		return d.Rolling
-	case "weekly":
-		return d.Weekly
-	case "monthly":
-		return d.Monthly
-	}
-	return nil
-}
-
-// panel 把 OpenCode 的三窗数据映射成共享点阵面板。
+// panel 把 Command Code 的三窗数据映射成共享点阵面板（data 为 nil 时全部按无数据）。
 func (m Model) panel() gauge.Panel {
-	var p gauge.Panel
-	for i, k := range order {
-		p.Labels[i] = labels[k]
-		if w := m.data.window(k); w != nil {
+	p := gauge.Panel{Labels: labels}
+	var windows [3]*Window
+	if m.data != nil {
+		windows = [3]*Window{m.data.FiveHour, m.data.Weekly, m.data.Monthly}
+	}
+	for i, w := range windows {
+		if w != nil {
 			p.Windows[i] = gauge.Window{
 				Percent:  w.Percent,
 				HasData:  true,
@@ -57,7 +42,7 @@ func (m Model) Lines(width, height int) []string {
 	return gauge.Render(m.panel(), m.now, width, height)
 }
 
-// noKeyLines 是配置缺失或错误时的内容区（A4：提示缺配置及期望路径）。
+// noKeyLines 是配置缺失或错误时的内容区（提示缺配置及期望路径）。
 func (m Model) noKeyLines(width, height int) []string {
 	var lines []string
 	if m.configErr != "" {
@@ -65,7 +50,7 @@ func (m Model) noKeyLines(width, height int) []string {
 			"",
 			" " + stRed.Render(m.configErr),
 			"",
-			" 请修复配置文件，或在设置页重新保存 API Key：",
+			" 请修复配置文件，或在设置页重新保存 Command Code Key：",
 			"   " + m.configPath,
 		}
 		if m.configErr == "配置损坏" {
@@ -76,10 +61,10 @@ func (m Model) noKeyLines(width, height int) []string {
 			"",
 			" " + stAmber.Render("未配置 Key"),
 			"",
-			" 请在配置文件里填入 openCodeApiKey：",
+			" 请在配置文件里填入 commandCodeApiKey：",
 			"   " + m.configPath,
 			"",
-			" {\"openCodeApiKey\": \"你的 API Key\"}",
+			" {\"commandCodeApiKey\": \"你的 Command Code Key\"}",
 		}
 	}
 	for len(lines) < height {

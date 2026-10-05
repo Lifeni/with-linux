@@ -2,7 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-10-05
+
+### Added
+
+- 「Command Code 用量」tab（`A6`，属范围扩张，2026-10-05 用户确认）：轮询 Command Code 的 alpha 用量端点（`alpha/whoami`、`alpha/billing/credits`、`alpha/billing/subscriptions`、`alpha/usage/summary`，`Authorization: Bearer`），以三列点阵显示 5 小时窗 / 每周窗 / 月度额度与重置倒计时，展示格式与 OpenCode 页一致；401/403 或网络失败复用同一套文案与重试策略
+- 配置字段按提供商区分：`openCodeApiKey`（原通用的 `apiKey` 更名）与 `commandCodeApiKey`；设置页增加 `Command Code Key` 可编辑行（只写回 `commandCodeApiKey`，不影响 `openCodeApiKey`）
+- 配置迁移：打开新版时自动把旧配置的 `apiKey` 一次性改写为 `openCodeApiKey` 并删除旧字段（`config.Migrate`，程序启动时调用）
+- 抽出新包 `internal/gauge`：三列点阵渲染（点阵/标签/倒计时）由 OpenCode 页与 Command Code 页共用
+
+### Changed
+
+- 顶栏标签增至三个：`OpenCode Go 用量`、`Command Code 用量`、`设置`；窄屏短名取最后一个词，重名时退到两个词（两个用量页为 `Go 用量` / `Code 用量`）；命中区间按宽度钳制
+
+### Fixed
+
+- Command Code 页在「已配置 key 但首帧数据还没到」时渲染会空指针崩溃（pty 冒烟发现的回归，已修并补测试）
 
 ## [0.2.1] - 2026-09-28
 
@@ -75,6 +90,7 @@
 - 配置：`$XDG_CONFIG_HOME/with-linux/config.json`（默认 `~/.config/with-linux/config.json`），`apiKey` 字段
 - 交付：单一可执行文件，全静态交叉编译 `linux/amd64` ＋ `linux/arm64`
 
+[0.3.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.3.0
 [0.2.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.2.0
 [0.1.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.1.1

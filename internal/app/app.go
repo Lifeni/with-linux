@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/Lifeni/with-linux/internal/cmdusage"
 	"github.com/Lifeni/with-linux/internal/meta"
 	"github.com/Lifeni/with-linux/internal/settings"
 	"github.com/Lifeni/with-linux/internal/usage"
@@ -25,6 +26,7 @@ type tabSpan struct{ start, end int }
 // 标签索引。框架不约定接口/注册机制（章程），就按索引显式分发。
 const (
 	tabUsage = iota
+	tabCmdUsage
 	tabSettings
 )
 
@@ -36,6 +38,7 @@ type Model struct {
 	height    int
 	scroll    int
 	usage     usage.Model
+	cmdUsage  cmdusage.Model
 	settings  settings.Model
 
 	contentOverride func() []string // 仅供测试注入多行内容
@@ -53,8 +56,9 @@ var (
 // New 返回框架模型。标签按索引显式分发，不写死"只有一个面板"（章程：余地要留）。
 func New(info meta.Info) Model {
 	return Model{
-		toolNames: []string{"OpenCode Go 用量", "设置"},
+		toolNames: []string{"OpenCode Go 用量", "Command Code 用量", "设置"},
 		usage:     usage.New(),
+		cmdUsage:  cmdusage.New(),
 		settings:  settings.New(info),
 		width:     80,
 		height:    24,
@@ -87,6 +91,8 @@ func (m Model) contentLines() []string {
 	switch m.active {
 	case tabUsage:
 		return m.usage.Lines(m.width, m.viewHeight())
+	case tabCmdUsage:
+		return m.cmdUsage.Lines(m.width, m.viewHeight())
 	case tabSettings:
 		return m.settings.Lines(m.width)
 	}
@@ -124,15 +130,31 @@ func clampStyled(s string, width int) string {
 	return lipgloss.NewStyle().MaxWidth(width).Render(s)
 }
 
-// shortName 是窄屏降级用的短名：取最后一个空格之后的部分；没有空格就截到 4 格。
+// lastWords 取 name 末尾 k 个空格分隔词（k 超过词数时返回全部）。
+func lastWords(name string, k int) string {
+	fields := strings.Fields(name)
+	if len(fields) == 0 {
+		return ""
+	}
+	if k > len(fields) {
+		k = len(fields)
+	}
+	return strings.Join(fields[len(fields)-k:], " ")
+}
+
+// shortName 是窄屏降级用的短名：取最后一个词；若与别的标签重名则退到取最后两个词
+// （如两个用量页最后一个词都是「用量」，此时改用「Go 用量」/「Code 用量」区分）。
 func (m Model) shortName(i int) string {
-	n := m.toolNames[i]
-	if j := strings.LastIndex(n, " "); j >= 0 && j+1 < len(n) {
-		if s := n[j+1:]; runewidth.StringWidth(s) > 0 {
-			return s
+	one := lastWords(m.toolNames[i], 1)
+	if one == "" {
+		return runewidth.Truncate(m.toolNames[i], 4, "…")
+	}
+	for j := range m.toolNames {
+		if j != i && lastWords(m.toolNames[j], 1) == one {
+			return lastWords(m.toolNames[i], 2)
 		}
 	}
-	return runewidth.Truncate(n, 4, "…")
+	return one
 }
 
 // tabPlan 是当前宽度下 tab 栏的渲染方案。renderTabBar 与 tabLayoutFor 共用同一份计算，
@@ -211,14 +233,22 @@ func (m Model) tabLayoutFor() []tabSpan {
 	}
 	for i, name := range p.labels {
 		w := runewidth.StringWidth(name)
-		spans[i] = tabSpan{start: x, end: x + w}
+		start, end := x, x+w
+		// 极窄终端里连单个标签都比宽度宽：把命中区间钳到终端宽度内（渲染侧同样会截断）。
+		if start > m.width {
+			start = m.width
+		}
+		if end > m.width {
+			end = m.width
+		}
+		spans[i] = tabSpan{start: start, end: end}
 		x += w
 	}
 	return spans
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.usage.Init()
+	return tea.Batch(m.usage.Init(), m.cmdUsage.Init())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -247,7 +277,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case settings.SavedMsg:
-		// 配置写回成功：让用量工具重读配置并立即取数。
+		// 配置写回成功：让对应的用量工具重读配置并立即取数。
+		if msg.CommandCode {
+			cm, cmd := m.cmdUsage.Update(cmdusage.RefreshMsg{})
+			m.cmdUsage = cm
+			return m, cmd
+		}
 		um, cmd := m.usage.Update(usage.RefreshMsg{})
 		m.usage = um
 		return m, cmd
@@ -279,7 +314,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case s == "down":
 			m.scroll++
 		default:
-			// 其他按键（如用量页的 R 刷新）转发给用量工具
+			// 其他按键（如用量页的 R 刷新）转发给当前用量工具
+			if m.active == tabCmdUsage {
+				cm, cmd := m.cmdUsage.Update(msg)
+				m.cmdUsage = cm
+				return m, cmd
+			}
 			um, cmd := m.usage.Update(msg)
 			m.usage = um
 			return m, cmd
@@ -319,12 +359,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// 其余消息（每秒钟的 tick、取数完成、输入框光标闪烁等）同时喂给两个页面：
-	// 用量工具必须一直收到 tick（切到设置页也在轮询），设置页要收输入框的 Blink。
+	// 其余消息（每秒钟的 tick、取数完成、输入框光标闪烁等）同时喂给各页面：
+	// 两个用量工具必须一直收到 tick（切到设置页也在轮询），设置页要收输入框的 Blink。
 	um, uc := m.usage.Update(msg)
+	cm, cc := m.cmdUsage.Update(msg)
 	sm, sc := m.settings.Update(msg)
-	m.usage, m.settings = um, sm
-	return m, tea.Batch(uc, sc)
+	m.usage, m.cmdUsage, m.settings = um, cm, sm
+	return m, tea.Batch(uc, cc, sc)
 }
 
 // renderTabBar 渲染第 0 行：程序名 + 工具标签（选中高亮）。窄屏逐级降级，永不折行。
@@ -362,6 +403,9 @@ func (m Model) stateRight() (string, int) {
 	if m.active == tabSettings {
 		return m.settings.StatusText()
 	}
+	if m.active == tabCmdUsage {
+		return m.cmdUsage.StatusText()
+	}
 	return m.usage.StatusText()
 }
 
@@ -369,6 +413,9 @@ func (m Model) stateRight() (string, int) {
 func (m Model) stateRightShort() string {
 	if m.active == tabSettings {
 		return m.settings.ShortStatusText()
+	}
+	if m.active == tabCmdUsage {
+		return m.cmdUsage.ShortStatusText()
 	}
 	return m.usage.ShortStatusText()
 }

@@ -66,8 +66,8 @@ func apiKeyLine(t *testing.T, m Model) int {
 func TestMouseClickTabSwitchesPanel(t *testing.T) {
 	m := newTestModel()
 	spans := m.tabLayoutFor()
-	if len(spans) != 2 {
-		t.Fatalf("tab 区间数 = %d, want 2", len(spans))
+	if len(spans) != 3 {
+		t.Fatalf("tab 区间数 = %d, want 3", len(spans))
 	}
 
 	// 点击第二个 tab 的中间位置
@@ -85,7 +85,7 @@ func TestMouseClickTabSwitchesPanel(t *testing.T) {
 	}
 
 	// 点击 tab 区间外（顶栏空白），不应切换
-	nm, _ = m.Update(tea.MouseClickMsg{X: spans[1].end + 3, Y: 0, Button: tea.MouseLeft})
+	nm, _ = m.Update(tea.MouseClickMsg{X: spans[2].end + 5, Y: 0, Button: tea.MouseLeft})
 	if got := nm.(Model).active; got != 0 {
 		t.Fatalf("点击顶栏空白后 active = %d, want 0", got)
 	}
@@ -148,14 +148,19 @@ func TestKeyLeftRightSwitchesPanel(t *testing.T) {
 		t.Fatalf("→ 后 active = %d, want 1", got)
 	}
 
-	nm, _ = nm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	nm, _ = nm.(Model).Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	if got := nm.(Model).active; got != 2 {
+		t.Fatalf("→ 后 active = %d, want 2", got)
+	}
+
+	nm, _ = nm.(Model).Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
 	if got := nm.(Model).active; got != 0 {
 		t.Fatalf("循环到头后 active = %d, want 0", got)
 	}
 
-	nm, _ = nm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
-	if got := nm.(Model).active; got != 1 {
-		t.Fatalf("← 回退后 active = %d, want 1", got)
+	nm, _ = nm.(Model).Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	if got := nm.(Model).active; got != 2 {
+		t.Fatalf("← 回退后 active = %d, want 2", got)
 	}
 }
 
@@ -214,10 +219,10 @@ func TestSettingsTabStatusHints(t *testing.T) {
 		t.Fatalf("用量页状态栏缺少 R 刷新: %q", got)
 	}
 
-	nm, _ := m.Update(keyPress('2'))
+	nm, _ := m.Update(keyPress('3'))
 	got := nm.(Model)
 	if got.active != tabSettings {
-		t.Fatalf("按 2 后 active = %d, want %d", got.active, tabSettings)
+		t.Fatalf("按 3 后 active = %d, want %d", got.active, tabSettings)
 	}
 	status := got.renderStatus()
 	if !strings.Contains(status, "设置") || !strings.Contains(status, "Enter 编辑") {
@@ -307,7 +312,7 @@ func TestSettingsSaveWritesConfigAndRefreshesUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取配置失败: %v", err)
 	}
-	if got := cfg.APIKey; got != "oc_sk_abc123" {
+	if got := cfg.OpenCodeAPIKey; got != "oc_sk_abc123" {
 		t.Fatalf("配置里 key = %q, want oc_sk_abc123", got)
 	}
 
@@ -339,6 +344,32 @@ func TestSettingsMouseClickEntersEdit(t *testing.T) {
 	}
 }
 
+// —— Command Code 页接入框架（A6） ——
+
+func TestCommandCodeTabStatus(t *testing.T) {
+	m := newTestModel()
+	nm, _ := m.Update(keyPress('2'))
+	got := nm.(Model)
+	if got.active != tabCmdUsage {
+		t.Fatalf("按 2 后 active = %d, want %d", got.active, tabCmdUsage)
+	}
+	status := got.renderStatus()
+	if !strings.Contains(status, "Command Code") || !strings.Contains(status, "R 刷新") {
+		t.Fatalf("Command Code 页状态栏不对: %q", status)
+	}
+	if !strings.Contains(status, "未配置") {
+		t.Fatalf("Command Code 页应提示未配置 Key: %q", status)
+	}
+}
+
+func TestCommandCodeSavedMsgRefreshesCmdUsage(t *testing.T) {
+	m := newTestModel()
+	_, cmd := m.Update(settings.SavedMsg{CommandCode: true})
+	if cmd == nil {
+		t.Fatal("CommandCode SavedMsg 未触发 Command Code 页刷新")
+	}
+}
+
 // —— 窄屏降级（A） ——
 
 // 顶栏/状态栏在任何宽度下都不超宽（窄屏要降级，不能靠终端折行兜底）。
@@ -346,7 +377,7 @@ func TestBarsNeverExceedWidth(t *testing.T) {
 	for _, w := range []int{12, 20, 24, 30, 40, 60, 80, 100} {
 		m := newTestModel()
 		m.width = w
-		for _, tab := range []int{tabUsage, tabSettings} {
+		for _, tab := range []int{tabUsage, tabCmdUsage, tabSettings} {
 			m = m.activate(tab)
 			for name, line := range map[string]string{"tab 栏": m.renderTabBar(), "状态栏": m.renderStatus()} {
 				if got := lipgloss.Width(line); got > w {
@@ -357,13 +388,25 @@ func TestBarsNeverExceedWidth(t *testing.T) {
 	}
 }
 
+// 两个用量页的窄屏短名不重复：最后一个词都是「用量」时退到两个词。
+func TestShortNamesAreDistinct(t *testing.T) {
+	m := newTestModel()
+	a, b := m.shortName(0), m.shortName(1)
+	if a == b {
+		t.Fatalf("短名重复: %q == %q", a, b)
+	}
+	if !strings.Contains(a, "用量") || !strings.Contains(b, "用量") {
+		t.Fatalf("短名应保留「用量」: %q / %q", a, b)
+	}
+}
+
 // 窄屏顶栏逐级降级：全名 → 短名 → 去程序名 → 只留当前 tab ＋ …；命中区间与渲染一致。
 func TestTabBarDegrades(t *testing.T) {
 	m := newTestModel()
 
 	m.width = 100
 	wide := m.renderTabBar()
-	if !strings.Contains(wide, "With Linux") || !strings.Contains(wide, "OpenCode Go 用量") {
+	if !strings.Contains(wide, "With Linux") || !strings.Contains(wide, "OpenCode Go 用量") || !strings.Contains(wide, "Command Code") {
 		t.Fatalf("宽屏顶栏不完整: %q", wide)
 	}
 

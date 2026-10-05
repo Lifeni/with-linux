@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Lifeni/with-linux/internal/app"
+	"github.com/Lifeni/with-linux/internal/config"
 	"github.com/Lifeni/with-linux/internal/meta"
 )
 
@@ -58,6 +59,10 @@ func run(args []string, stdout, stderr io.Writer, runTUI runTUIFunc) int {
 }
 
 func runTUI(info meta.Info) error {
+	// 打开新版时把旧配置的通用 apiKey 一次性迁移为 openCodeApiKey（best-effort，不阻断启动）。
+	if err := config.Migrate(); err != nil {
+		fmt.Fprintln(os.Stderr, "with-linux: 配置迁移失败:", err)
+	}
 	p := tea.NewProgram(app.New(info))
 	_, err := p.Run()
 	return err

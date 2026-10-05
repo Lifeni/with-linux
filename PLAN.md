@@ -2,7 +2,7 @@
 
 > 章程见 `AGENTS.md`。计划经用户确认（2026-09-25「按这个开工」）。进度与验证记录见 `PROGRESS.md`，调研结论见 `FINDINGS.md`。
 
-**状态（2026-09-28）：M0–M6 完成**，A1–A5 验收核对见 `PROGRESS.md`。遗留：403 真实路径未实测（无「有 key 无订阅」的账号，靠 httptest 覆盖）。窄屏方案 C/D（窄宽两段式、极小终端提示）：**用户 2026-09-28 决定不做，不列入范围**。
+**状态（2026-10-05）：M0–M7 完成并发布 v0.3.0**，A1–A6 验收核对见 `PROGRESS.md`。遗留：403 真实路径未实测（无「有 key 无订阅」的账号，靠 httptest 覆盖）。窄屏方案 C/D（窄宽两段式、极小终端提示）：**用户 2026-09-28 决定不做，不列入范围**。
 
 ## M0 · 只读调研（动手前）
 
@@ -53,6 +53,19 @@
 3. CI/发布：增加 push/PR 检查；发布前检查格式、模块文件、vet、tests；GoReleaser 不再在发布过程中修改 `go.mod`。
 4. 细节：倒计时改为向上取整；鼠标只响应左键；补 `cmd/wl` 参数处理测试。
 5. 密钥轮换和 Git 历史清理属于用户执行的安全事件处置，不在本次代码改动范围。
+
+## M7 · Command Code 用量页（2026-10-05，范围扩张已确认，验收 A6）
+
+- 章程先改（`AGENTS.md`：`A6` ＋「数据获取（Command Code）」＋ tab 栏加 `Command Code` ＋ 设置页加 `Command Code Key` 行），再动代码
+- `internal/config`：加 `commandCodeApiKey` 字段与 `SaveCommandCodeAPIKey`（抽出通用 `saveField`，只改指定字段、保留未知字段）
+- `internal/gauge`（新）：把三列点阵渲染从 `internal/usage/view.go` 抽成共享包（`Window`/`Panel`/`Render`/`ClampLines`）；`internal/usage` 改为映射 ＋ 调用 gauge，行为不变
+- `internal/cmdusage`（新）：轮询 Command Code alpha 端点，解析成 5h/weekly/月度三窗；模型与错误文案、重试策略对齐 `internal/usage`
+- `internal/settings`：加 `Command Code Key` 可编辑行（复用单个输入框，按选中行读写 `apiKey` 或 `commandCodeApiKey`）；`SavedMsg` 带 `CommandCode` 标志
+- `internal/app`：标签增至三个（`OpenCode Go 用量` / `Command Code` / `设置`）；`SavedMsg` 按标志刷新对应页面；两个用量页同时收 tick
+
+### M7 完成定义
+
+- `go test ./...` 全绿；双架构交叉编译通过；pty 冒烟对已安装 `/usr/bin/wl` 全绿；真实 key 实测 Command Code 页渲染出三列真实百分比与倒计时
 
 ## 纪律
 

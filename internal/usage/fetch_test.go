@@ -191,7 +191,7 @@ func TestLoadAPIKey(t *testing.T) {
 		t.Fatalf("文件缺失时 key = %q, want 空", got)
 	}
 
-	if err := os.WriteFile(path, []byte(`{"apiKey":"abc123","fillStyle":"dot"}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"openCodeApiKey":"abc123","fillStyle":"dot"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err = loadAPIKey()

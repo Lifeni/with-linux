@@ -99,3 +99,17 @@
 - 倒计时旧实现使用 `Math.ceil`，Go 实现曾用整数截断，剩余不足 1 秒会显示 `0s`。修复为 `math.Ceil`。
 - 鼠标点击分支曾不检查按键类型，右键也会触发 tab/设置行点击。修复为只响应左键。
 - 发版工作流曾只在 tag 上运行，并在 GoReleaser 钩子里执行 `go mod tidy`。修复为 push/PR CI 与发布前检查，发布钩子不再修改模块文件。
+
+## 6. Command Code 用量端点（2026-10-05 调研，属范围扩张 A6）
+
+来源：第三方 `pi-commandcode-provider` 的 `/commandcode-quota`（读的就是 `cmd` CLI `/usage` 用的那套端点）＋ 本机真实 key 只读探测核对。这些是**未公开的 alpha 端点**，可能变动，故一律按「缺字段 = 无数据」处理，不猜测。
+
+- 端点（`https://api.commandcode.ai`，请求头 `Authorization: Bearer <commandCodeApiKey>`）：
+  - `GET /alpha/whoami` → `{success, user:{id,name,email,userName}, org}`；个人账号 `org=null`，团队账号有 `org.id`（作为后续请求的 `?orgId=` 参数）。
+  - `GET /alpha/billing/credits` → `credits{monthlyCredits,purchasedCredits,freeCredits,...}` ＋ `windowLimits{fiveHour{used,cap,exceeded,resetAt}, weekly{...}, limited, exceeded}`。
+  - `GET /alpha/billing/subscriptions` → `data{planId,status,currentPeriodStart,currentPeriodEnd,...}`（`currentPeriodEnd` 为 ISO 字符串）。
+  - `GET /alpha/usage/summary` → `{totalCount,totalCost,totalCredits,totalMonthlyCredits,totalFreeCredits,totalPurchasedCredits,...,periodBasis:"billing-period"}`。
+- 真实探测样例（2026-10-05，个人账号）：`credits.monthlyCredits=9.9118`（月度剩余）、`fiveHour{used:0.0882,cap:3,resetAt:1791186972217}`、`weekly{used:0.0882,cap:6,resetAt:1791773772217}`（`resetAt` 是**毫秒**时间戳）、`summary.totalMonthlyCredits=0.0865`（本计费周期月度已用）、`subscriptions.data.planId`（如 `goat`）/`currentPeriodEnd`。
+- **三列映射**：5h = `fiveHour.used/cap`；每周 = `weekly.used/cap`；月度 = `totalMonthlyCredits ÷ (totalMonthlyCredits + credits.monthlyCredits)`（已用 ÷（已用＋剩余））。缺任一侧字段 → 该列 `[--]`。
+- 容错：whoami 的 401/403/非 2xx 直接判 `KEY_INVALID`/`NO_SUB`/`HTTP_<n>`；credits/subscriptions/summary 的 401/403 同样致命，其余失败该部分按无数据；三者全失败 → `BAD_RESPONSE`。重试策略与 OpenCode 页一致（3 次尝试、2s 间隔；认证类不重试）。
+- 渲染实测（2026-10-05，真实 key）：`5h [16%] 1h14m / Week [8%] 6d20h / Month [5%] 30d20h`，与 `used/cap`、`used/(used+remaining)` 吻合。

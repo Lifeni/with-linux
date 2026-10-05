@@ -35,7 +35,7 @@ func TestLoadMissingAndBroken(t *testing.T) {
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("文件缺失错误未包装 fs.ErrNotExist: %v", err)
 	}
-	if got := cfg.APIKey; got != "" {
+	if got := cfg.OpenCodeAPIKey; got != "" {
 		t.Fatalf("文件缺失时 key = %q, want 空", got)
 	}
 
@@ -50,7 +50,7 @@ func TestLoadMissingAndBroken(t *testing.T) {
 	if !errors.As(err, &loadErr) || loadErr.Kind != LoadInvalid {
 		t.Fatalf("坏 JSON 错误 = %v, want LoadInvalid", err)
 	}
-	if got := cfg.APIKey; got != "" {
+	if got := cfg.OpenCodeAPIKey; got != "" {
 		t.Fatalf("坏 JSON 时 key = %q, want 空", got)
 	}
 }
@@ -127,14 +127,14 @@ func TestSaveCreatesFile0600(t *testing.T) {
 	if err != nil {
 		t.Fatalf("回读配置出错: %v", err)
 	}
-	if got := cfg.APIKey; got != "oc_sk_abc123" {
+	if got := cfg.OpenCodeAPIKey; got != "oc_sk_abc123" {
 		t.Fatalf("回读 key = %q, want oc_sk_abc123", got)
 	}
 }
 
 func TestSavePreservesUnknownFields(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	writeConfig(t, `{"apiKey":"old","fillStyle":"dot","nested":{"a":1}}`)
+	writeConfig(t, `{"openCodeApiKey":"old","fillStyle":"dot","nested":{"a":1}}`)
 
 	if err := Save("new-key"); err != nil {
 		t.Fatalf("Save 出错: %v", err)
@@ -144,7 +144,7 @@ func TestSavePreservesUnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.APIKey; got != "new-key" {
+	if got := cfg.OpenCodeAPIKey; got != "new-key" {
 		t.Fatalf("key = %q, want new-key", got)
 	}
 	var fields map[string]json.RawMessage
@@ -174,7 +174,7 @@ func TestSaveEmptyClearsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.APIKey; got != "" {
+	if got := cfg.OpenCodeAPIKey; got != "" {
 		t.Fatalf("清除后 key = %q, want 空", got)
 	}
 }
@@ -189,7 +189,7 @@ func TestSaveRepairsBrokenFileWithBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.APIKey; got != "fixed" {
+	if got := cfg.OpenCodeAPIKey; got != "fixed" {
 		t.Fatalf("key = %q, want fixed", got)
 	}
 	backup, err := os.ReadFile(Path() + ".bak")
@@ -212,7 +212,7 @@ func TestSaveRepairsNullFileWithBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.APIKey; got != "fixed" {
+	if got := cfg.OpenCodeAPIKey; got != "fixed" {
 		t.Fatalf("key = %q, want fixed", got)
 	}
 	backup, err := os.ReadFile(Path() + ".bak")
@@ -266,6 +266,79 @@ func TestBackupPathsDoNotOverwrite(t *testing.T) {
 	}
 	if string(first) != `{first` || string(second) != `{second` {
 		t.Fatalf("备份被覆盖：first=%q second=%q", first, second)
+	}
+}
+
+func TestMigrateLegacyAPIKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `{"apiKey":"oc_sk_old","fillStyle":"dot"}`)
+
+	if err := Migrate(); err != nil {
+		t.Fatalf("Migrate 出错: %v", err)
+	}
+	out, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(out, &fields); err != nil {
+		t.Fatalf("迁移后不是合法 JSON: %v", err)
+	}
+	if _, ok := fields["apiKey"]; ok {
+		t.Fatalf("旧 apiKey 未被移除: %s", out)
+	}
+	if _, ok := fields["openCodeApiKey"]; !ok {
+		t.Fatalf("未生成 openCodeApiKey: %s", out)
+	}
+	if _, ok := fields["fillStyle"]; !ok {
+		t.Fatalf("迁移丢了未知字段: %s", out)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenCodeAPIKey != "oc_sk_old" {
+		t.Fatalf("迁移后 key = %q, want oc_sk_old", cfg.OpenCodeAPIKey)
+	}
+}
+
+func TestMigrateNoopWhenMissingOrAlreadyNew(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := Migrate(); err != nil { // 文件缺失：不报错、也不创建文件
+		t.Fatalf("缺失时 Migrate 出错: %v", err)
+	}
+	if _, err := os.Stat(Path()); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("缺失时 Migrate 不应创建文件")
+	}
+
+	writeConfig(t, `{"openCodeApiKey":"x"}`)
+	before, _ := os.ReadFile(Path())
+	if err := Migrate(); err != nil {
+		t.Fatalf("无旧字段时 Migrate 出错: %v", err)
+	}
+	after, _ := os.ReadFile(Path())
+	if string(before) != string(after) {
+		t.Fatalf("无旧字段时不应改动文件:\n%s", after)
+	}
+}
+
+func TestSaveDropsLegacyAPIKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `{"apiKey":"legacy","fillStyle":"dot"}`)
+	if err := Save("new"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(Path())
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(out, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fields["apiKey"]; ok {
+		t.Fatalf("Save 未删除旧 apiKey: %s", out)
+	}
+	cfg, _ := Load()
+	if cfg.OpenCodeAPIKey != "new" {
+		t.Fatalf("key = %q, want new", cfg.OpenCodeAPIKey)
 	}
 }
 

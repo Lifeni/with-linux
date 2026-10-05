@@ -53,7 +53,7 @@ func loadKey(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("读取配置失败: %v", err)
 	}
-	return cfg.APIKey
+	return cfg.OpenCodeAPIKey
 }
 
 // 固定行号常量必须和实际渲染一致（框架的鼠标命中依赖它）。
@@ -70,6 +70,7 @@ func TestLayoutLineMatchesRender(t *testing.T) {
 	}{
 		{innerTitle, "设置"},
 		{innerAPIKey, labelAPIKey},
+		{innerCommandCode, labelCommandCode},
 		{innerConfig, labelConfig},
 		{innerSection, labelSection},
 		{innerVersion, labelVersion},
@@ -382,5 +383,53 @@ func TestShortStatusText(t *testing.T) {
 	m = nm
 	if got := m.ShortStatusText(); got != "已保存" {
 		t.Fatalf("保存后短状态 = %q", got)
+	}
+}
+
+func loadKeyCC(t *testing.T) string {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("读取配置失败: %v", err)
+	}
+	return cfg.CommandCodeAPIKey
+}
+
+// Command Code 行独立写回 commandCodeApiKey，且不动 apiKey。
+func TestCommandCodeRowSavesItsOwnField(t *testing.T) {
+	m := newTestModel(t, testKey) // apiKey 已有值
+
+	m = update(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if m.selected != rowCommandCode {
+		t.Fatalf("↓ 后 selected = %d, want %d", m.selected, rowCommandCode)
+	}
+	m = update(m, enter())
+
+	ccKey := "user_cc_fake_key_0123"
+	for _, ch := range []rune(ccKey) {
+		m = update(m, keyPress(ch))
+	}
+	nm, cmd := m.Update(enter())
+	m = nm
+	if cmd == nil {
+		t.Fatal("保存后未产出 Cmd")
+	}
+	msg, ok := cmd().(SavedMsg)
+	if !ok || !msg.CommandCode {
+		t.Fatalf("Cmd 产出 %T/%+v, want SavedMsg{CommandCode:true}", cmd(), msg)
+	}
+	if got := loadKeyCC(t); got != ccKey {
+		t.Fatalf("配置 commandCodeApiKey = %q, want %q", got, ccKey)
+	}
+	if got := loadKey(t); got != testKey {
+		t.Fatalf("保存 Command Code 动了 apiKey: %q, want %q", got, testKey)
+	}
+}
+
+// 点 Command Code 行进入编辑。
+func TestClickCommandCodeRowEntersEdit(t *testing.T) {
+	m := newTestModel(t, testKey)
+	if got := m.ClickLine(commandCodeKeyLine); !got.Editing() || got.selected != rowCommandCode {
+		t.Fatalf("点 Command Code 行未进入编辑: editing=%v selected=%d", got.Editing(), got.selected)
 	}
 }
