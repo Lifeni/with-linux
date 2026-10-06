@@ -352,3 +352,62 @@ func writeConfig(t *testing.T, content string) {
 		t.Fatalf("写配置失败: %v", err)
 	}
 }
+
+// 展示开关写回并可回读；缺省时是 nil（区别于显式 false）。
+func TestShowFlags(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SaveShowOpenCode(true); err != nil {
+		t.Fatalf("SaveShowOpenCode 出错: %v", err)
+	}
+	if err := SaveShowCommandCode(false); err != nil {
+		t.Fatalf("SaveShowCommandCode 出错: %v", err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShowOpenCode == nil || !*cfg.ShowOpenCode {
+		t.Fatalf("ShowOpenCode = %v, want true", cfg.ShowOpenCode)
+	}
+	if cfg.ShowCommandCode == nil || *cfg.ShowCommandCode {
+		t.Fatalf("ShowCommandCode = %v, want false", cfg.ShowCommandCode)
+	}
+}
+
+func TestShowFlagsAbsentAreNil(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `{"openCodeApiKey":"k"}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShowOpenCode != nil || cfg.ShowCommandCode != nil {
+		t.Fatalf("缺省开关应为 nil: %v / %v", cfg.ShowOpenCode, cfg.ShowCommandCode)
+	}
+}
+
+func TestShowFlagSavePreservesOtherFields(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `{"openCodeApiKey":"oc_sk_x","fillStyle":"dot"}`)
+
+	if err := SaveShowOpenCode(true); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenCodeAPIKey != "oc_sk_x" {
+		t.Fatalf("保存开关动了 key: %q", cfg.OpenCodeAPIKey)
+	}
+	var fields map[string]json.RawMessage
+	out, _ := os.ReadFile(Path())
+	if err := json.Unmarshal(out, &fields); err != nil {
+		t.Fatalf("写回不是合法 JSON: %v", err)
+	}
+	if _, ok := fields["fillStyle"]; !ok {
+		t.Fatalf("未知字段被丢弃: %s", out)
+	}
+}

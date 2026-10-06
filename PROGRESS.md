@@ -383,3 +383,20 @@ ok  	with-linux/internal/app	0.093s
 - 用发布产物 `sudo apt install --reinstall`：`Unpacking with-linux (0.3.0) over (0.3.0~dev)` / `Setting up with-linux (0.3.0)`；`command -v wl` → `/usr/bin/wl`；`wl --version` → `wl 0.3.0`；`dpkg -V` 无输出。
 - 对已安装的 `/usr/bin/wl` 跑 pty 冒烟：**37/37 PASS**；「关于」显示 `版本 0.3.0` / `构建日期 2026-10-05` / `提交 5cd4843`。
 - 备注：`gh auth status` 报 token invalid，但 git push（经 `gh auth git-credential`）与 `gh run` / `gh release` 查询均正常，属误报，未影响本次发布。
+
+### 后续调整（2026-10-06，用户指令）
+
+- 指令：「在设置页面增加两个开关，是否展示这两个页面，就在每个 key 的前面增加选项即可，默认是都关闭的，如果用户填了对应 key，则自动打开一次，但如果后续用户关闭了，就不自动打开」；布局用户选「每行 key 前加勾选框（同行）」——`空格` 切换开关、`回车` 编辑 key。记为 `A7`（属范围扩张）。
+- `internal/config`：新增 `ShowOpenCode` / `ShowCommandCode`（`*bool`，nil = 从未显式设置，区别于显式 false）；`saveField` 泛化为 `saveValue(path, field, value, drop...)`，bool 与 key 共用同一条读写路径（保留未知字段、`.bak` 备份语义不变）；新增 `SaveShowOpenCode` / `SaveShowCommandCode`。
+- `internal/settings`：key 行首加勾选框（`[✓]`/`[ ]`，两态同宽 4，`checkWidth` 由 runewidth 算）；新增 `Visibility()`（显式开关优先，nil 时按 key 是否存在推导）与 `TogglesChangedMsg`；`ClickLine` → `Click(x, line, width)`：点勾选框切开关、点行内其余处编辑，线框水平居中故按 `boxLeft` 定位勾选框列。
+- `internal/app`：顶栏按可见性增删 tab；`←`/`→`、`1`–`9`、短名去重只在**可见**标签间；当前页被关闭时退回「设置」；`SavedMsg` 后重算可见性（填 key 可能让用量页自动出现）；`TogglesChangedMsg` 直接驱动可见性。
+
+### 验证 23：单测 ＋ 装后冒烟（A7） — PASS（race 受环境限制，见下）
+
+- `gofmt -l cmd internal` 无输出；`go mod tidy` 无 diff；`go vet ./...` 干净；`go test ./...` 全 `ok`。新增用例：config（开关写回/缺省 nil/保留其他字段）、settings（默认关闭、填 key 自动打开、显式关闭不重开、空格切换写回、勾选框点击命中、两态同宽）、app（无 key 默认隐藏且落在设置、保存 key 自动出现 tab、关闭当前页退回设置、隐藏页不可键盘切换）。
+- 双架构交叉编译 `GOOS=linux GOARCH={amd64,arm64} go build ./...` 通过。
+- `go test -race ./...` 在本机 TSAN 初始化即失败（`ThreadSanitizer: unsupported VMA range`），未改动的包（`meta`/`gauge`）同样失败 → 环境限制，非本次改动。
+- 重打包 `0.3.1~dev`、`sudo apt install --reinstall`；对已安装 `/usr/bin/wl` 跑 pty 冒烟（一律用临时 `XDG_CONFIG_HOME`，真实配置未触碰）：
+  - 空配置 → 顶栏只有「设置」，两个 key 行均 `[ ]`（默认关闭）。
+  - 有 `openCodeApiKey` → 顶栏出现 `Go 用量`、无 `Code 用量`；进设置页显示 `[✓] OpenCode Key`（填 key 自动打开）。
+  - `showOpenCode=false` ＋ 有 key → 无 OpenCode tab、勾选框 `[ ]`（显式关闭后不再自动打开）。

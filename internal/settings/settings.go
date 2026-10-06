@@ -21,11 +21,23 @@ type SavedMsg struct {
 	CommandCode bool
 }
 
+// TogglesChangedMsg 在勾选框切换后由 Update 产出，携带两页最新可见性；框架据此增删顶栏 tab。
+type TogglesChangedMsg struct {
+	OpenCode    bool
+	CommandCode bool
+}
+
 // 可编辑行索引。以后加设置项在这里追加，并在 innerLines 里加一行。
 const (
 	rowAPIKey = iota
 	rowCommandCode
 	editableRows
+)
+
+// 行首勾选框：展示开关。宽度固定（checkWidth 由 runewidth 计算，见 init）。
+const (
+	checkOn  = "[✓] "
+	checkOff = "[ ] "
 )
 
 // 框内固定行号（自 0 起，与 innerLines 的拼装顺序一致；TestLayoutLineMatchesRender 盯着它）。
@@ -67,6 +79,9 @@ const boxChromeW = 10
 // tailMaskMin 是掩码时保留头尾的最小长度：短于它就整段掩码。
 const tailMaskMin = 12
 
+// checkWidth 是勾选框的可见宽度（开关两态同宽，按 runewidth 算，鼠标命中与对齐共用）。
+var checkWidth = runewidth.StringWidth(checkOn)
+
 var (
 	stTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("36"))
 	stLabel   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -86,6 +101,8 @@ type Model struct {
 	configPath string
 	key        string // 已保存的 OpenCode key（明文；渲染时掩码）
 	keyCC      string // 已保存的 Command Code key（明文；渲染时掩码）
+	showOC     *bool  // OpenCode 用量页展示开关（nil = 未显式设置，按 key 推导）
+	showCC     *bool  // Command Code 用量页展示开关（nil = 未显式设置，按 key 推导）
 
 	input    textinput.Model
 	editing  bool
@@ -110,6 +127,20 @@ func New(info meta.Info) Model {
 // Editing 报告是否处于编辑态：框架据此把全局键让给输入框。
 func (m Model) Editing() bool { return m.editing }
 
+// Visibility 报告两个用量页当前是否展示：显式开关优先，未显式设置时按对应 key 是否存在推导。
+// 框架据此决定顶栏要展示哪些 tab。
+func (m Model) Visibility() (openCode, commandCode bool) {
+	return effectiveVisibility(m.showOC, m.key), effectiveVisibility(m.showCC, m.keyCC)
+}
+
+// effectiveVisibility 决定某用量页是否展示：显式设置优先；未设置时，填了 key 就自动展示一次。
+func effectiveVisibility(explicit *bool, key string) bool {
+	if explicit != nil {
+		return *explicit
+	}
+	return key != ""
+}
+
 // Reload 重读配置文件并退出编辑态（框架在切换标签时调用，避免编辑态跨标签残留）。
 func (m Model) Reload() Model {
 	m.editing = false
@@ -123,7 +154,7 @@ func (m Model) Hints() string {
 	if m.editing {
 		return "Q 退出 · Enter 保存 · Esc 取消"
 	}
-	return "Q 退出 · ↑↓ 选择 · Enter 编辑"
+	return "Q 退出 · ↑↓ 选择 · Enter 编辑 · 空格 开关"
 }
 
 // StatusText 是状态栏右侧的保存状态。severity：2=错误，1=注意，0=正常。
@@ -186,16 +217,19 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.selected = (m.selected + 1) % editableRows
 		case "enter":
 			return m.beginEdit()
+		case "space", " ":
+			return m.toggle()
 		}
 	}
 	return m, nil
 }
 
-// ClickLine 处理内容区第 line 行（0 起、自然高度里的行号）的鼠标点击：
-// 点在可编辑行上即进入编辑。框架负责把终端行换算成这里的行号（含滚动与居中偏移）。
-func (m Model) ClickLine(line int) Model {
+// Click 处理内容区第 line 行（0 起、自然高度里的行号）、第 x 列（终端列）的鼠标点击：
+// 点在行首勾选框上则切换展示开关，点可编辑行其余处则进入编辑。
+// 框架负责把终端行换算成这里的行号（含滚动与居中偏移）；width 是终端宽度（用于定位水平居中的线框）。
+func (m Model) Click(x, line, width int) (Model, tea.Cmd) {
 	if m.editing {
-		return m
+		return m, nil
 	}
 	switch line {
 	case apiKeyLine:
@@ -203,10 +237,36 @@ func (m Model) ClickLine(line int) Model {
 	case commandCodeKeyLine:
 		m.selected = rowCommandCode
 	default:
-		return m
+		return m, nil
 	}
-	nm, _ := m.beginEdit()
-	return nm
+	if m.checkboxHit(x, width) {
+		return m.toggle()
+	}
+	return m.beginEdit()
+}
+
+// checkboxHit 报告终端列 x 是否落在当前行的勾选框上（线框水平居中，需先算线框左边界）。
+func (m Model) checkboxHit(x, width int) bool {
+	start := m.boxLeft(width) + 1 + 4 + gutterW // 左边框 1 ＋ 左内边距 4 ＋ 选择标记
+	return x >= start && x < start+checkWidth
+}
+
+// boxLeft 是水平居中后线框左边界所在的终端列（与 Lines 的居中计算一致）。
+func (m Model) boxLeft(width int) int {
+	bw := 0
+	for _, l := range m.innerLines(width) {
+		if w := lipgloss.Width(l); w > bw {
+			bw = w
+		}
+	}
+	bw += boxChromeW
+	if width > 0 && bw > width {
+		bw = width
+	}
+	if left := (width - bw) / 2; left > 0 {
+		return left
+	}
+	return 0
 }
 
 // keyFor / setKey 按行索引读写对应的 key。
@@ -269,15 +329,49 @@ func (m Model) save() (Model, tea.Cmd) {
 	return m, func() tea.Msg { return SavedMsg{CommandCode: row == rowCommandCode} }
 }
 
+// toggle 切换当前行的展示开关：写回显式 bool（从此不再自动打开），并产出可见性变更消息。
+func (m Model) toggle() (Model, tea.Cmd) {
+	row := m.selected
+	var (
+		next bool
+		err  error
+	)
+	if row == rowCommandCode {
+		next = !effectiveVisibility(m.showCC, m.keyCC)
+		err = config.SaveShowCommandCode(next)
+	} else {
+		next = !effectiveVisibility(m.showOC, m.key)
+		err = config.SaveShowOpenCode(next)
+	}
+	if err != nil {
+		m.saveErr = err.Error()
+		return m, nil
+	}
+	if row == rowCommandCode {
+		m.showCC = &next
+	} else {
+		m.showOC = &next
+	}
+	m.loadErr = ""
+	m.saveErr = ""
+	m.saved = true
+	oc, cc := m.Visibility()
+	return m, func() tea.Msg { return TogglesChangedMsg{OpenCode: oc, CommandCode: cc} }
+}
+
 func (m Model) reloadConfig() Model {
 	cfg, err := config.Load()
 	m.loadErr = ""
 	m.key = ""
 	m.keyCC = ""
+	m.showOC = nil
+	m.showCC = nil
 	switch {
 	case err == nil:
 		m.key = cfg.OpenCodeAPIKey
 		m.keyCC = cfg.CommandCodeAPIKey
+		m.showOC = cfg.ShowOpenCode
+		m.showCC = cfg.ShowCommandCode
 	case config.IsMissing(err):
 	default:
 		m.loadErr = config.UserMessage(err)
@@ -298,10 +392,22 @@ func maskKey(key string) string {
 	return string(r[:6]) + "…" + string(r[len(r)-4:])
 }
 
+// checkMark 返回勾选框文本（开/关两态同宽）。
+func checkMark(on bool) string {
+	if on {
+		return checkOn
+	}
+	return checkOff
+}
+
 // innerLines 渲染线框内的内容行（不含边框与居中留白），行数恒为 innerRows。
 func (m Model) innerLines(width int) []string {
+	showOC, showCC := m.Visibility()
+	ocLabel := checkMark(showOC) + labelAPIKey
+	ccLabel := checkMark(showCC) + labelCommandCode
+
 	labelW := 0
-	for _, l := range []string{labelAPIKey, labelCommandCode, labelConfig, labelVersion, labelDate, labelCommit, labelGo, labelPlatform, labelRepo} {
+	for _, l := range []string{ocLabel, ccLabel, labelConfig, labelVersion, labelDate, labelCommit, labelGo, labelPlatform, labelRepo} {
 		if w := runewidth.StringWidth(l); w > labelW {
 			labelW = w
 		}
@@ -336,11 +442,11 @@ func (m Model) innerLines(width int) []string {
 	}
 
 	return []string{
-		stTitle.Render("设置"),                    // innerTitle
-		"",                                      // 空行
-		editable(labelAPIKey, m.key, rowAPIKey), // innerAPIKey
-		editable(labelCommandCode, m.keyCC, rowCommandCode), // innerCommandCode
-		row(labelConfig, m.configPath, false),               // innerConfig
+		stTitle.Render("设置"),                // innerTitle
+		"",                                  // 空行
+		editable(ocLabel, m.key, rowAPIKey), // innerAPIKey
+		editable(ccLabel, m.keyCC, rowCommandCode), // innerCommandCode
+		row(labelConfig, m.configPath, false),      // innerConfig
 		"",
 		stSection.Render(labelSection), // innerSection
 		row(labelVersion, m.info.Version, false),

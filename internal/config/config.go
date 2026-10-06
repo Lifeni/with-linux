@@ -15,6 +15,11 @@ import (
 type Config struct {
 	OpenCodeAPIKey    string `json:"openCodeApiKey"`
 	CommandCodeAPIKey string `json:"commandCodeApiKey"`
+	// ShowOpenCode / ShowCommandCode 控制两个用量页是否在顶栏展示。
+	// 用指针区分「显式设置过」与「从未设置」：nil 表示从未设置，此时按对应 key 是否存在推导
+	// （填了 key 自动展示一次）；显式 true/false 尊重用户选择，不再自动打开。
+	ShowOpenCode    *bool `json:"showOpenCode"`
+	ShowCommandCode *bool `json:"showCommandCode"`
 }
 
 // LoadKind 区分配置缺失、损坏和无法读取，供界面给出准确提示。
@@ -138,15 +143,25 @@ func UserShortMessage(err error) string {
 // 目录不存在时按 0700 创建；文件权限 0600（key 是敏感信息）。写临时文件再 rename，避免写坏原文件。
 // 空字符串等于清除 key。
 func Save(apiKey string) error {
-	return saveField(Path(), "openCodeApiKey", apiKey, "apiKey")
+	return saveValue(Path(), "openCodeApiKey", apiKey, "apiKey")
 }
 
 // SaveCommandCodeAPIKey 把 commandCodeApiKey 写回配置文件，语义与 Save 完全一致（只改这一个字段）。
 func SaveCommandCodeAPIKey(apiKey string) error {
-	return saveField(Path(), "commandCodeApiKey", apiKey)
+	return saveValue(Path(), "commandCodeApiKey", apiKey)
 }
 
-func saveField(path, field, apiKey string, drop ...string) error {
+// SaveShowOpenCode / SaveShowCommandCode 写回两个用量页的展示开关，语义与 Save 一致（只改这一个字段）。
+func SaveShowOpenCode(v bool) error {
+	return saveValue(Path(), "showOpenCode", v)
+}
+
+func SaveShowCommandCode(v bool) error {
+	return saveValue(Path(), "showCommandCode", v)
+}
+
+// saveValue 读原 JSON → 只改一个字段 → 原样保留其他字段 → 写回（drop 里的字段被删除）。
+func saveValue(path, field string, value any, drop ...string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -154,11 +169,11 @@ func saveField(path, field, apiKey string, drop ...string) error {
 	if err != nil {
 		return err
 	}
-	keyJSON, err := json.Marshal(apiKey)
+	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	fields[field] = keyJSON
+	fields[field] = raw
 	for _, d := range drop {
 		delete(fields, d)
 	}

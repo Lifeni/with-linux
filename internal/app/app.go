@@ -41,6 +41,9 @@ type Model struct {
 	cmdUsage  cmdusage.Model
 	settings  settings.Model
 
+	showOpenCode    bool // OpenCode 用量页是否展示（由设置页开关 + key 决定）
+	showCommandCode bool // Command Code 用量页是否展示
+
 	contentOverride func() []string // 仅供测试注入多行内容
 }
 
@@ -55,7 +58,7 @@ var (
 
 // New 返回框架模型。标签按索引显式分发，不写死"只有一个面板"（章程：余地要留）。
 func New(info meta.Info) Model {
-	return Model{
+	m := Model{
 		toolNames: []string{"OpenCode Go 用量", "Command Code 用量", "设置"},
 		usage:     usage.New(),
 		cmdUsage:  cmdusage.New(),
@@ -63,10 +66,65 @@ func New(info meta.Info) Model {
 		width:     80,
 		height:    24,
 	}
+	m.showOpenCode, m.showCommandCode = m.settings.Visibility()
+	if !m.tabVisible(m.active) {
+		m.active = tabSettings // 两个用量页默认关闭时，落在「设置」上
+	}
+	return m
+}
+
+// tabVisible 报告某标签当前是否展示（用量页由开关决定，设置页恒展示）。
+func (m Model) tabVisible(i int) bool {
+	switch i {
+	case tabUsage:
+		return m.showOpenCode
+	case tabCmdUsage:
+		return m.showCommandCode
+	default:
+		return true
+	}
+}
+
+// visibleTabs 返回当前可见标签的索引（按展示顺序）。
+func (m Model) visibleTabs() []int {
+	tabs := make([]int, 0, len(m.toolNames))
+	for i := range m.toolNames {
+		if m.tabVisible(i) {
+			tabs = append(tabs, i)
+		}
+	}
+	return tabs
+}
+
+// stepTab 在可见标签里相对当前标签移动 delta 步（循环）。
+func (m Model) stepTab(delta int) int {
+	tabs := m.visibleTabs()
+	pos := 0
+	for i, t := range tabs {
+		if t == m.active {
+			pos = i
+			break
+		}
+	}
+	return tabs[(pos+delta+len(tabs))%len(tabs)]
+}
+
+// refreshVisibility 从设置页重算两个用量页的可见性；若当前标签被隐藏则退回「设置」。
+func (m Model) refreshVisibility() Model {
+	m.showOpenCode, m.showCommandCode = m.settings.Visibility()
+	if !m.tabVisible(m.active) {
+		m.active = tabSettings
+		m.scroll = 0
+	}
+	return m
 }
 
 // activate 切到第 idx 个标签：重置滚动；设置页重读配置并退出编辑态（避免编辑态跨标签残留）。
+// 隐藏的标签不接受切换。
 func (m Model) activate(idx int) Model {
+	if !m.tabVisible(idx) {
+		return m
+	}
 	m.active = idx
 	m.scroll = 0
 	m.settings = m.settings.Reload()
@@ -142,7 +200,7 @@ func lastWords(name string, k int) string {
 	return strings.Join(fields[len(fields)-k:], " ")
 }
 
-// shortName 是窄屏降级用的短名：取最后一个词；若与别的标签重名则退到取最后两个词
+// shortName 是窄屏降级用的短名：取最后一个词；若与别的可见标签重名则退到取最后两个词
 // （如两个用量页最后一个词都是「用量」，此时改用「Go 用量」/「Code 用量」区分）。
 func (m Model) shortName(i int) string {
 	one := lastWords(m.toolNames[i], 1)
@@ -150,7 +208,7 @@ func (m Model) shortName(i int) string {
 		return runewidth.Truncate(m.toolNames[i], 4, "…")
 	}
 	for j := range m.toolNames {
-		if j != i && lastWords(m.toolNames[j], 1) == one {
+		if j != i && m.tabVisible(j) && lastWords(m.toolNames[j], 1) == one {
 			return lastWords(m.toolNames[i], 2)
 		}
 	}
@@ -181,6 +239,9 @@ func (m Model) tabPlanFor() tabPlan {
 	build := func(withTitle, short, onlyActive bool) tabPlan {
 		p := tabPlan{title: withTitle, labels: make([]string, len(m.toolNames))}
 		for i := range m.toolNames {
+			if !m.tabVisible(i) {
+				continue // 关闭的用量页不渲染
+			}
 			if onlyActive && i != m.active {
 				continue // 折叠：标签留空
 			}
@@ -277,7 +338,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case settings.SavedMsg:
-		// 配置写回成功：让对应的用量工具重读配置并立即取数。
+		// 配置写回成功：重算可见性（填了 key 可能让用量页自动出现），再让对应用量工具重读配置并取数。
+		m = m.refreshVisibility()
 		if msg.CommandCode {
 			cm, cmd := m.cmdUsage.Update(cmdusage.RefreshMsg{})
 			m.cmdUsage = cm
@@ -287,17 +349,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.usage = um
 		return m, cmd
 
+	case settings.TogglesChangedMsg:
+		// 展示开关变动：增删顶栏 tab；当前标签若被关闭则退回「设置」。
+		m.showOpenCode, m.showCommandCode = msg.OpenCode, msg.CommandCode
+		if !m.tabVisible(m.active) {
+			m.active = tabSettings
+			m.scroll = 0
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		switch s := msg.String(); {
 		case s == "q" || s == "Q" || s == "esc" || s == "ctrl+c":
 			return m, tea.Quit
 		case s == "left" || s == "shift+tab":
-			return m.activate((m.active - 1 + len(m.toolNames)) % len(m.toolNames)), nil
+			return m.activate(m.stepTab(-1)), nil
 		case s == "right" || s == "tab":
-			return m.activate((m.active + 1) % len(m.toolNames)), nil
+			return m.activate(m.stepTab(1)), nil
 		case len(s) == 1 && s[0] >= '1' && s[0] <= '9':
-			if idx := int(s[0] - '1'); idx < len(m.toolNames) {
-				return m.activate(idx), nil
+			tabs := m.visibleTabs()
+			if idx := int(s[0] - '1'); idx < len(tabs) {
+				return m.activate(tabs[idx]), nil
 			}
 			return m, nil
 		case s == "pgup":
@@ -340,10 +412,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// 内容区点击：设置页点可编辑行直接进入编辑
+		// 内容区点击：设置页点勾选框切开关、点可编辑行进入编辑
 		if m.active == tabSettings && msg.Y >= 1 && msg.Y <= m.height-2 {
-			m.settings = m.settings.ClickLine(m.contentStart() + msg.Y - 1)
-			return m, nil
+			sm, cmd := m.settings.Click(msg.X, m.contentStart()+msg.Y-1, m.width)
+			m.settings = sm
+			return m, cmd
 		}
 
 	case tea.MouseWheelMsg:

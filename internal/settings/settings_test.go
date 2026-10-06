@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/Lifeni/with-linux/internal/config"
 	"github.com/Lifeni/with-linux/internal/meta"
@@ -309,14 +310,28 @@ func TestLoadBrokenConfigShowsErrorAndRepairsWithBackup(t *testing.T) {
 	}
 }
 
-func TestClickLineEntersEditOnlyOnAPIKeyRow(t *testing.T) {
+func TestClickRowEntersEditOutsideCheckbox(t *testing.T) {
 	m := newTestModel(t, testKey)
+	const width = 80
 
-	if got := m.ClickLine(0); got.Editing() {
+	if got, _ := m.Click(5, 0, width); got.Editing() {
 		t.Fatal("点上边框进入了编辑态")
 	}
-	if got := m.ClickLine(apiKeyLine); !got.Editing() {
+	// 点行内非勾选框处 → 进入编辑
+	if got, _ := m.Click(5, apiKeyLine, width); !got.Editing() {
 		t.Fatal("点 OpenCode Key 行未进入编辑态")
+	}
+	// 点行首勾选框 → 切换开关，不进入编辑
+	cb := m.boxLeft(width) + 1 + 4 + gutterW
+	got, cmd := m.Click(cb, apiKeyLine, width)
+	if got.Editing() {
+		t.Fatal("点勾选框进入了编辑态")
+	}
+	if cmd == nil {
+		t.Fatal("点勾选框未产出 Cmd")
+	}
+	if _, ok := cmd().(TogglesChangedMsg); !ok {
+		t.Fatalf("点勾选框 Cmd 产出 %T, want TogglesChangedMsg", cmd())
 	}
 }
 
@@ -429,7 +444,122 @@ func TestCommandCodeRowSavesItsOwnField(t *testing.T) {
 // 点 Command Code 行进入编辑。
 func TestClickCommandCodeRowEntersEdit(t *testing.T) {
 	m := newTestModel(t, testKey)
-	if got := m.ClickLine(commandCodeKeyLine); !got.Editing() || got.selected != rowCommandCode {
+	if got, _ := m.Click(5, commandCodeKeyLine, 80); !got.Editing() || got.selected != rowCommandCode {
 		t.Fatalf("点 Command Code 行未进入编辑: editing=%v selected=%d", got.Editing(), got.selected)
+	}
+}
+
+// —— 展示开关（默认关闭、填 key 自动打开一次、显式关闭后不再自动打开） ——
+
+func rowLine(m Model, line int) string {
+	return stripANSI(m.Lines(120)[line])
+}
+
+// 勾选框两态同宽且宽度固定（对齐与鼠标命中共用 checkWidth）。
+func TestCheckboxGlyphsSameWidth(t *testing.T) {
+	if checkWidth != 4 {
+		t.Fatalf("checkWidth = %d, want 4", checkWidth)
+	}
+	if runewidth.StringWidth(checkOn) != runewidth.StringWidth(checkOff) {
+		t.Fatalf("开关两态宽度不一致: %q / %q", checkOn, checkOff)
+	}
+}
+
+// key 与开关的组合决定可见性：显式开关优先，未设置时按 key 是否存在推导。
+func TestVisibilityFollowsKeyUntilExplicitlySet(t *testing.T) {
+	m := newTestModel(t, "")
+	if oc, cc := m.Visibility(); oc || cc {
+		t.Fatalf("无 key、开关未设置时可见性 = (%v,%v), want (false,false)", oc, cc)
+	}
+	if line := rowLine(m, apiKeyLine); !strings.Contains(line, checkOff) {
+		t.Fatalf("无 key 时勾选框应为关: %q", line)
+	}
+
+	// 填 key（开关仍为未设置）→ 自动展示
+	m = update(m, enter())
+	m.input.SetValue(testKey)
+	nm, _ := m.Update(enter())
+	m = nm
+	if oc, _ := m.Visibility(); !oc {
+		t.Fatal("填了 key 后应自动展示")
+	}
+	if line := rowLine(m, apiKeyLine); !strings.Contains(line, checkOn) {
+		t.Fatalf("填 key 后勾选框应为开: %q", line)
+	}
+	// Reload 仍展示（未设置开关按 key 推导）
+	if oc, _ := m.Reload().Visibility(); !oc {
+		t.Fatal("Reload 后应仍展示")
+	}
+}
+
+// 空格切换开关：写回显式 bool，产出可见性消息，勾选框随状态变化。
+func TestSpaceTogglesAndPersists(t *testing.T) {
+	m := newTestModel(t, testKey) // 有 key → 默认展示
+	if oc, _ := m.Visibility(); !oc {
+		t.Fatal("有 key 时 OpenCode 页应默认展示")
+	}
+
+	nm, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
+	m = nm
+	if cmd == nil {
+		t.Fatal("空格未产出 Cmd")
+	}
+	msg, ok := cmd().(TogglesChangedMsg)
+	if !ok || msg.OpenCode {
+		t.Fatalf("空格 Cmd = %T/%+v, want TogglesChangedMsg{OpenCode:false}", cmd(), msg)
+	}
+	if oc, _ := m.Visibility(); oc {
+		t.Fatal("空格后 OpenCode 页仍展示")
+	}
+	if line := rowLine(m, apiKeyLine); !strings.Contains(line, checkOff) {
+		t.Fatalf("切换后勾选框应为关: %q", line)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShowOpenCode == nil || *cfg.ShowOpenCode {
+		t.Fatalf("配置 showOpenCode = %v, want 显式 false", cfg.ShowOpenCode)
+	}
+}
+
+// 显式关闭后，即便再保存 key 也不再自动打开。
+func TestManualCloseNotAutoReopenedByKeySave(t *testing.T) {
+	m := newTestModel(t, testKey)
+	m = update(m, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace})) // 关闭
+	if oc, _ := m.Visibility(); oc {
+		t.Fatal("关闭失败")
+	}
+
+	m = update(m, enter())
+	m.input.SetValue(testKey + "_v2")
+	nm, cmd := m.Update(enter())
+	m = nm
+	if cmd == nil {
+		t.Fatal("保存未产出 Cmd")
+	}
+	if oc, _ := m.Visibility(); oc {
+		t.Fatal("显式关闭后保存 key 又自动打开了")
+	}
+}
+
+// 无 key 时也能手动打开（页面会提示未配置），且是显式 true。
+func TestToggleOnWithoutKey(t *testing.T) {
+	m := newTestModel(t, "")
+	nm, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
+	m = nm
+	msg, ok := cmd().(TogglesChangedMsg)
+	if !ok || !msg.OpenCode {
+		t.Fatalf("空格 Cmd = %T/%+v, want TogglesChangedMsg{OpenCode:true}", cmd(), msg)
+	}
+	if oc, _ := m.Visibility(); !oc {
+		t.Fatal("手动打开后应展示")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShowOpenCode == nil || !*cfg.ShowOpenCode {
+		t.Fatalf("配置 showOpenCode = %v, want 显式 true", cfg.ShowOpenCode)
 	}
 }

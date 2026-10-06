@@ -27,10 +27,13 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// newTestModel 构造两个标签（用量、设置）＋ 多行占位内容的模型，用来验证"点击 tab 切换面板"与滚动。
+// newTestModel 构造三个标签都可见（用量、Command Code、设置）＋ 多行占位内容的模型，
+// 用来验证"点击 tab 切换面板"与滚动。用量页的展示开关默认按 key 推导，这里显式打开。
 func newTestModel() Model {
 	m := New(meta.Info{Version: "test", Date: "2026-09-28"})
 	m.width, m.height = 80, 24
+	m.showOpenCode, m.showCommandCode = true, true
+	m.active = tabUsage
 	m.contentOverride = func() []string {
 		lines := make([]string, 0, 30)
 		for i := 1; i <= 30; i++ {
@@ -535,5 +538,99 @@ func TestUsageContentFillsViewWithoutScroll(t *testing.T) {
 		if m.maxScroll() != 0 {
 			t.Fatalf("用量页不该可滚动：maxScroll = %d", m.maxScroll())
 		}
+	}
+}
+
+// —— 用量页展示开关（默认关闭、填 key 自动打开、关了不再自动打开） ——
+
+// 没有 key 且开关未设置时，两个用量页默认不展示，落在设置页。
+func TestUsageTabsHiddenByDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := New(meta.Info{})
+	if m.active != tabSettings {
+		t.Fatalf("无 key 时 active = %d, want 设置", m.active)
+	}
+	if got := m.visibleTabs(); len(got) != 1 || got[0] != tabSettings {
+		t.Fatalf("无 key 时可见标签 = %v, want [设置]", got)
+	}
+	bar := m.renderTabBar()
+	if strings.Contains(bar, "OpenCode") || strings.Contains(bar, "Command Code") {
+		t.Fatalf("无 key 时顶栏仍展示用量页: %q", bar)
+	}
+	if !strings.Contains(bar, "设置") {
+		t.Fatalf("顶栏缺少设置: %q", bar)
+	}
+}
+
+// 填了 key 后自动打开对应用量页（开关从未显式设置时按 key 推导）。
+func TestSavingKeyAutoOpensUsageTab(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := New(meta.Info{})
+	m = m.activate(tabSettings)
+
+	nm, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = nm.(Model)
+	for _, ch := range []rune("oc_sk_auto_open_key_01") {
+		nm, _ := m.Update(keyPress(ch))
+		m = nm.(Model)
+	}
+	nm, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = nm.(Model)
+	if cmd == nil {
+		t.Fatal("保存未产出 Cmd")
+	}
+	nm, _ = m.Update(cmd()) // 把 SavedMsg 送回框架
+	m = nm.(Model)
+
+	if !m.showOpenCode {
+		t.Fatal("填了 key 后 OpenCode 页未自动展示")
+	}
+	if !strings.Contains(m.renderTabBar(), "OpenCode") {
+		t.Fatalf("顶栏未出现 OpenCode 页: %q", m.renderTabBar())
+	}
+}
+
+// 关闭当前用量页 → 标签消失，active 退回设置；且显式 false 覆盖 key 推导。
+func TestTogglingOffHidesUsageTab(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := config.Save("oc_sk_fake_key_for_tests_0123"); err != nil {
+		t.Fatal(err)
+	}
+	m := New(meta.Info{})
+	if !m.showOpenCode {
+		t.Fatal("有 key 时应展示 OpenCode 页")
+	}
+	m = m.activate(tabUsage)
+
+	nm, _ := m.Update(settings.TogglesChangedMsg{OpenCode: false, CommandCode: m.showCommandCode})
+	m = nm.(Model)
+	if m.showOpenCode {
+		t.Fatal("关闭后仍展示 OpenCode 页")
+	}
+	if m.active != tabSettings {
+		t.Fatalf("关闭当前标签后 active = %d, want 设置", m.active)
+	}
+	if strings.Contains(m.renderTabBar(), "OpenCode") {
+		t.Fatalf("关闭后顶栏仍有 OpenCode: %q", m.renderTabBar())
+	}
+}
+
+// 被关闭的用量页不参与键盘切换：→ 与数字键都按「可见标签」的次序走。
+func TestHiddenUsageTabNotSwitchable(t *testing.T) {
+	m := newTestModel()
+	m.showCommandCode = false
+	m.active = tabUsage
+
+	nm, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	if got := nm.(Model).active; got != tabSettings {
+		t.Fatalf("→ 后 active = %d, want 设置（跳过关闭的 Command Code 页）", got)
+	}
+	nm, _ = m.Update(keyPress('2'))
+	if got := nm.(Model).active; got != tabSettings {
+		t.Fatalf("按 2 后 active = %d, want 设置（第二个可见标签）", got)
+	}
+	// 直接切到隐藏标签也应被拒绝
+	if got := m.activate(tabCmdUsage); got.active != tabUsage {
+		t.Fatalf("activate 隐藏标签后 active = %d, want %d", got.active, tabUsage)
 	}
 }
