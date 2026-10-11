@@ -119,6 +119,53 @@ func TestDotMatrixHorizontallyCentered(t *testing.T) {
 	}
 }
 
+// 100% 的列必须整列填满：不得残留暗点（顶部渐变在满格时取消）。
+func TestFullPercentColumnHasNoDimDots(t *testing.T) {
+	p := panel3(
+		Window{HasData: true, Percent: 100, ResetsAt: "2026-09-25T20:00:00Z", Status: "ok"},
+		Window{HasData: true, Percent: 100, ResetsAt: "2026-09-29T00:00:00Z", Status: "ok"},
+		Window{HasData: true, Percent: 100, ResetsAt: "2026-10-01T00:00:00Z", Status: "ok"},
+	)
+	now := time.Now()
+	for _, h := range []int{6, 8, 12, 20, 30} {
+		for _, w := range []int{24, 40, 80, 120} {
+			lines := Render(p, now, w, h)
+			for i, l := range lines {
+				if strings.Contains(stripANSI(l), dotDim) {
+					t.Fatalf("w=%d h=%d 行 %d 在 100%% 时仍有暗点: %q", w, h, i, stripANSI(l))
+				}
+			}
+		}
+	}
+}
+
+// 渐变取消的边界与标签取整一致：≥99.5%（显示 [100%]）整列填满，<99.5% 仍留顶部渐变。
+func TestRampCancelsAtRoundedFull(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		pct     float64
+		wantDim bool
+	}{
+		{99.5, false}, // 显示 [100%] → 满格
+		{100, false},
+		{99.4, true}, // 显示 [99%] → 保留渐变
+		{98, true},
+		{50, true},
+	}
+	for _, tc := range cases {
+		p := panel3(
+			Window{HasData: true, Percent: tc.pct, Status: "ok"},
+			Window{HasData: true, Percent: tc.pct, Status: "ok"},
+			Window{HasData: true, Percent: tc.pct, Status: "ok"},
+		)
+		lines := Render(p, now, 80, 20)
+		hasDim := strings.Contains(stripANSI(strings.Join(lines, "\n")), dotDim)
+		if hasDim != tc.wantDim {
+			t.Fatalf("pct=%.1f 有暗点=%v, want %v", tc.pct, hasDim, tc.wantDim)
+		}
+	}
+}
+
 // 恰好 height 行；无数据列标签为 [--]；任何行不超宽。
 func TestRenderShapeAndWidth(t *testing.T) {
 	p := panel3(

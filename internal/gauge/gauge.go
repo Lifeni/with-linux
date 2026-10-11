@@ -240,7 +240,14 @@ func Render(p Panel, now time.Time, width, height int) []string {
 				base = pctStyle(w.Percent)
 			}
 			fh := targetRows(w, h)
-			lit := litRow(i+1, l-1-y, fh, ramp, colW)
+			// 满格时取消顶部渐变，让整列实心填满——否则 ramp 会把最上面几行削成
+			// 稀疏，视觉上永远像没到 100%（矮终端尤其明显）。用与标签一致的取整判断，
+			// 保证「显示 100%」与「整列填满」严格同时发生（99.5% 会显示 [100%]）。
+			rampEff := ramp
+			if w.HasData && math.Round(w.Percent) >= 100 {
+				rampEff = 0
+			}
+			lit := litRow(i+1, l-1-y, fh, rampEff, colW)
 
 			// 先按相邻同状态合并成 run，末尾空格裁掉后再上样式
 			// （每格是「点+空」，整块右端那个空格不算墨迹）

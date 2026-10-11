@@ -400,3 +400,14 @@ ok  	with-linux/internal/app	0.093s
   - 空配置 → 顶栏只有「设置」，两个 key 行均 `[ ]`（默认关闭）。
   - 有 `openCodeApiKey` → 顶栏出现 `Go 用量`、无 `Code 用量`；进设置页显示 `[✓] OpenCode Key`（填 key 自动打开）。
   - `showOpenCode=false` ＋ 有 key → 无 OpenCode tab、勾选框 `[ ]`（显式关闭后不再自动打开）。
+
+### 修复：100% 用量点阵未填满（2026-10-06，用户反馈 bug）
+
+- 现象：用量到 100% 时点阵整列看着没满，顶部几行稀疏。排查：`litRow` 的顶部 ramp（渐变段 `clamp(round(H*0.16),4,16)`）固定在填充区顶部，100% 时被削成稀疏——与旧 `usage-tui.js` 行为一致，非移植偏差，属设计导致的观感问题（矮终端 ramp 最小 4 行，100% 看着只有六七成满）。
+- 改法：`internal/gauge` 中当 `math.Round(w.Percent) >= 100`（与标签取整一致，`≥99.5%` 即显示 `[100%]`）时把该列 `ramp` 置 0，整列实心；`<100%` 的渐变行为不变。有意偏离旧实现，已记 `FINDINGS.md §1.4`、`CHANGELOG.md [Unreleased].Fixed`。
+- 验证 24 — PASS：
+  - `gofmt -l cmd internal` 无输出；`go mod tidy` 无 diff；`go vet ./...` 干净；`go test ./...` 全 `ok`。
+  - 新增用例：`TestFullPercentColumnHasNoDimDots`（多宽度/高度下 100% 全列无暗点）、`TestRampCancelsAtRoundedFull`（99.5%→无暗点、99.4%/98%/50%→仍有暗点）。渲染实测（height 12/20/30）：100% 列整列 `●`，50% 列保留渐变。
+  - 双架构交叉编译 `GOOS=linux GOARCH={amd64,arm64} go build ./...` 通过。
+  - `VERSION=0.3.1~dev bash scripts/mkdeb.sh arm64` → `sudo apt install --reinstall` → `Setting up with-linux (0.3.1~dev)`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`bf71a4e4…`）；`dpkg -V` 无输出；`wl --version` → `wl 0.3.1~dev`。
+  - 对已安装 `/usr/bin/wl` 跑 pty 冒烟（临时 `XDG_CONFIG_HOME`，真实配置未触碰）：顶栏三标签、「关于」显示 `0.3.1~dev`、key 掩码与配置路径正常、假 key 得 401 不崩溃；5/5 PASS。
