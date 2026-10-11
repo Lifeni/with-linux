@@ -132,7 +132,10 @@ func stripANSI(s string) string {
 
 func TestAboutShowsBuildInfo(t *testing.T) {
 	m := newTestModel(t, testKey)
-	body := strings.Join(m.Lines(120), "\n")
+	// 配置文件行的值按可用宽截断（见 innerLines），而临时目录路径长度随环境变化，
+	// 故渲染宽度按完整路径反推：路径 ＋ 线框/选择标记/标签列/间距（34）再留余量。
+	width := max(120, runewidth.StringWidth(m.configPath)+40)
+	body := strings.Join(m.Lines(width), "\n")
 	for _, want := range []string{"0.1.2-dev", "2026-09-28", "4d690b1", "go1.27.1", "linux/arm64", meta.RepoURL, m.configPath} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("内容区缺少 %q:\n%s", want, body)

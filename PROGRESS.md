@@ -411,3 +411,14 @@ ok  	with-linux/internal/app	0.093s
   - 双架构交叉编译 `GOOS=linux GOARCH={amd64,arm64} go build ./...` 通过。
   - `VERSION=0.3.1~dev bash scripts/mkdeb.sh arm64` → `sudo apt install --reinstall` → `Setting up with-linux (0.3.1~dev)`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 一致（`bf71a4e4…`）；`dpkg -V` 无输出；`wl --version` → `wl 0.3.1~dev`。
   - 对已安装 `/usr/bin/wl` 跑 pty 冒烟（临时 `XDG_CONFIG_HOME`，真实配置未触碰）：顶栏三标签、「关于」显示 `0.3.1~dev`、key 掩码与配置路径正常、假 key 得 401 不崩溃；5/5 PASS。
+
+### 修复：设置页「关于」用例的脆弱断言（2026-10-11）
+
+- 现象：本机 `go test ./...` 里 `internal/settings.TestAboutShowsBuildInfo` 失败。它断言「完整配置路径出现在 width 120 的渲染中」，而配置文件行按可用宽截断：`avail = 120 − boxChromeW(10) − gutterW(2) − labelW(20) − 2 = 86`。远程工作区下 `t.TempDir()` 落在 `/run/user/1000/qoder-remote-worker-*/…`，路径 101 格被 `runewidth.Truncate(..., "…")` 截掉 → `Contains` 必然失败。判据：`TMPDIR=/tmp/tp`（短路径）跑同一用例即 `ok`；与验证 24 的 gauge 改动无关（HEAD 上同样红），CI 的 amd64 runner `/tmp` 短，所以一直是绿的。
+- 改法：只动用例——渲染宽度按完整路径反推 `max(120, runewidth.StringWidth(m.configPath)+40)`（40 = 线框/选择标记/标签列/间距 34 ＋ 余量）。产品行为不变：窄屏截断是章程要求的（「窄终端先截宽，避免折行」），错的是「路径一定容得下 120」这个断言前提。
+- 验证 25 — PASS：
+  - 本机长 TMPDIR（原失败环境）与 `TMPDIR=/tmp/tp` 短路径下，`go test ./internal/settings/ -count=1` 均 `ok`；`go test ./... -count=1` 八个包全 `ok`。
+  - `gofmt -l cmd internal` 无输出；`go vet ./...` 干净；`go mod tidy` 无 diff。
+  - 双架构交叉编译 `GOOS=linux GOARCH={amd64,arm64} go build ./...` 通过。
+  - `go test -race ./...` 本机仍是 `FATAL: ThreadSanitizer: unsupported VMA range`（本次未改动的 `meta`/`gauge` 同样失败）→ 环境限制，同验证 16/23；CI runner 继续执行该检查。
+  - 本次仅改测试文件，二进制无变化 → 不重装 deb（`/usr/bin/wl` 仍为 `0.3.1~dev`）；`CHANGELOG.md` 不加条目（非用户可见变更）。
