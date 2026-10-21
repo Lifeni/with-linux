@@ -140,8 +140,12 @@ func TestBrokenConfigShowsSpecificStatusAndPanel(t *testing.T) {
 	if got := m.ShortStatusText(); got != "损坏" {
 		t.Fatalf("损坏配置短状态 = %q, want 损坏", got)
 	}
-	body := strings.Join(m.Lines(80, 12), "\n")
-	if !strings.Contains(body, "配置损坏") || !strings.Contains(body, ".bak") {
-		t.Fatalf("配置损坏面板提示不完整:\n%s", body)
+	// 面板内是短提示，完整信息在状态栏（新 A4：小面板放不下路径与 .bak 说明）
+	snap := m.Snapshot()
+	if snap.Notice != "配置损坏" {
+		t.Fatalf("配置损坏时面板提示 = %q, want 配置损坏", snap.Notice)
+	}
+	if !strings.Contains(snap.Status, "配置损坏") || !strings.Contains(snap.Status, path) {
+		t.Fatalf("配置损坏时状态栏文案 = %q, want 含分类与配置路径", snap.Status)
 	}
 }

@@ -83,9 +83,13 @@ func TestMissingAndBrokenConfig(t *testing.T) {
 	if text, sev := m.StatusText(); text != "未配置 Key" || sev != 1 {
 		t.Fatalf("缺配置状态 = (%q,%d), want 未配置 Key/1", text, sev)
 	}
-	body := strings.Join(m.Lines(80, 12), "\n")
-	if !strings.Contains(body, "commandCodeApiKey") {
-		t.Fatalf("缺配置面板未提示 commandCodeApiKey:\n%s", body)
+	// 面板内提示缺 key 与设置入口，完整配置路径在状态栏（新 A4）
+	snap := m.Snapshot()
+	if snap.Notice != "未配置 Key" {
+		t.Fatalf("缺配置时面板提示 = %q, want 「未配置 Key」", snap.Notice)
+	}
+	if !strings.Contains(snap.Status, config.Path()) {
+		t.Fatalf("缺配置时状态栏文案 = %q, want 含配置文件完整路径", snap.Status)
 	}
 
 	path := config.Path()
@@ -101,17 +105,19 @@ func TestMissingAndBrokenConfig(t *testing.T) {
 	}
 }
 
-// 已配置 key 但首帧数据未到（data 为 nil）时渲染不得 panic（冒烟发现的回归）。
-func TestLinesWithKeyButNoData(t *testing.T) {
-	m := Model{hasKey: true, now: time.Now(), configPath: "/home/x/.config/with-linux/config.json"}
-	lines := m.Lines(80, 12)
-	if len(lines) != 12 {
-		t.Fatalf("行数 = %d, want 12", len(lines))
+// 已配置 key 但首帧数据未到（data 为 nil）时不得 panic、不得给出假数据（冒烟发现的回归）。
+func TestSnapshotWithKeyButNoData(t *testing.T) {
+	m := Model{hasKey: true, now: time.Now(), configPath: config.Path()}
+	snap := m.Snapshot()
+	if snap.Notice != "查询中…" {
+		t.Fatalf("首帧未到时面板提示 = %q, want 查询中…", snap.Notice)
 	}
-	last := lines[len(lines)-2]
-	for _, want := range []string{"5h", "Week", "Month", "[--]"} {
-		if !strings.Contains(last, want) {
-			t.Fatalf("无数据标签行缺 %q: %q", want, last)
+	for i, w := range snap.Windows {
+		if w != nil {
+			t.Errorf("第 %d 窗 = %+v, want nil（不显示假数据）", i, w)
 		}
+	}
+	if len(Labels) != 3 || Labels[0] != "5h" {
+		t.Errorf("Labels = %v, want [5h Week Month]", Labels)
 	}
 }

@@ -422,3 +422,519 @@ ok  	with-linux/internal/app	0.093s
   - 双架构交叉编译 `GOOS=linux GOARCH={amd64,arm64} go build ./...` 通过。
   - `go test -race ./...` 本机仍是 `FATAL: ThreadSanitizer: unsupported VMA range`（本次未改动的 `meta`/`gauge` 同样失败）→ 环境限制，同验证 16/23；CI runner 继续执行该检查。
   - 本次仅改测试文件，二进制无变化 → 不重装 deb（`/usr/bin/wl` 仍为 `0.3.1~dev`）；`CHANGELOG.md` 不加条目（非用户可见变更）。
+
+## 2026-10-11 · M8 第 1 步：章程与调研文档（系统状态页 ＋ 界面结构重构）
+
+- 用户两轮指令：① 「类似 btop 的系统监视功能，不需要选择应用操作，只要有监控图表和数据；需要 CPU、内存、网络、磁盘」；② 「去掉上方 tab 栏；把两个提供商的用量合并进系统状态页、展示小一点；整个界面的点阵统一成 btop 那种；设置页改成快捷键或右上角按钮打开，进去后可选两个提供商是否展示；不展示时空位由其他监控信息自动填充、尺寸自适应」。**属范围扩张＋章程重写，已逐条确认**。
+- 拍板的决定（AskUserQuestion）：braille 曲线／附加指标＝温度＋负载＋运行时长＋每核占用＋Swap／**行式网格**布局／用量用**横向 braille 计量条**／设置入口＝右上角按钮 ＋ 快捷键 `s`／设置页只有 `Esc` 返回、`q` 仍退出程序／1 秒采样、保留 2 分钟历史。**第一轮定的 `showMonitor` 开关被第二轮作废**（监控页成为唯一主页面，无从隐藏）。
+- 只读调研（写进 `FINDINGS.md §7`）：目标机 RK3588／8 核／7.5 GiB／NVMe；`/proc/{stat,loadavg,uptime,meminfo,net/dev,net/route,diskstats,self/mounts}` 与 `/sys/class/thermal`（7 个 zone）全部可用；实测确认四个坑——内存必须用 `MemAvailable`（本机 `MemFree` 只有 303 MB／7.5 GB，用错会显示 96%）、12 个网卡里只有 1 个物理网卡（主网卡按 `/proc/net/route` 的默认路由选）、`diskstats` 要滤掉 loop/ram/mtdblock 且分区不重复计、挂载点要按 `st_dev` 去重（本机 `/var/log.hdd` 与 `/` 同设备）；`diskstats` 的 util 字段是**第 13 列**（先前 PLAN 里误记为第 10 列，已改正）。
+- 字符宽度实测：braille／方块／半块字符在 `runewidth@v0.0.27` 与 `lipgloss/v2@v2.0.6` 下每字符宽度均为 1、非 ambiguous → 现有窄屏截断逻辑可直接复用（`FINDINGS.md §7.5`）。
+- `PLAN.md`：新增 M8 段（M8.0 调研表／M8.1 新界面结构样张／M8.2 包结构（新增 `sysstat`、`chart`、`grid`、`monitor`，删除 `gauge`，`usage`/`cmdusage` 去渲染化，`app` 缩成两视图切换器）／M8.3 行式网格与自动填充规则／M8.4 九步实施顺序／M8.5 完成定义／M8.6 章程 14 条改动清单／M8.7 九项风险），状态行标注 M8 为提案。
+- `AGENTS.md`：按 M8.6 的 14 条改完——§1 一句话目标（标题栏＋网格＋状态栏，tab 结构作废）／定位（改为「以系统状态仪表盘为主页面的工具箱」）／扩展性（新工具默认作为系统状态页的面板）／配置（`showOpenCode`/`showCommandCode` 语义改为控制面板，采样间隔不进配置）；非目标删两条（系统状态、一屏总览页）；**A1 重写**、**A2/A6 重写**（「三列点阵、与旧实现展示格式一致」作废）、A3/A4/A5/A7 改写、**新增 A8（系统状态）与 A9（布局自适应）**；约束新增「数据获取（系统监控）」「系统状态页只读、不采集进程」「采样固定 1 秒」；界面布局整段重写（标题栏含温度/运行时长/负载与可点击设置按钮、三行网格、统一 braille 画法与旧点阵作废、自动量程、全局键、无动画条款重写）；设置页改入口与返回键、勾选框语义改为「控制该提供商面板是否在系统状态页展示」。
+- `FINDINGS.md`：新增 §7（7.1 CPU/负载/运行时长、7.2 内存与 Swap、7.3 网络、7.4 磁盘与温度、7.5 字符宽度与 braille 画法、7.6 采样开销），逐字段映射 ＋ 本机实测数值 ＋ 过滤规则。
+- 本步**只改文档、不动代码**，故不重打包、不装 deb（`/usr/bin/wl` 仍为 `0.3.1~dev`，行为未变）；`CHANGELOG.md` 待代码落地时一并加条目。
+
+### 验证 26：文档改动范围与代码树未受影响 — PASS
+
+- `git diff --stat` → 只有 `AGENTS.md`（+79/−40 行区间内改动）、`FINDINGS.md`（+60）、`PLAN.md`（+137）三个文件，共 `3 files changed, 236 insertions(+), 40 deletions(-)`；`git status --short` 无未跟踪文件。
+- `gofmt -l cmd internal scripts` 无输出；`go build ./...` OK；`go vet ./...` OK；`go test ./...` 八个包全 `ok`（`cmd/wl`、`app`、`cmdusage`、`config`、`gauge`、`meta`、`settings`、`usage`）→ 证实本步没碰代码。
+- 敏感信息扫描（工作流第 9 条）：`AGENTS.md`/`FINDINGS.md`/`PLAN.md` 中家目录、主机名、私网地址均无命中；`\bpi\b` 唯一命中是既有的第三方包名 `pi-commandcode-provider`（非主机名）；`you` 的命中全部来自标识符 `tabLayoutFor` 里的 `la-you-t`（假阳性）。M8.1 样张里的主机名占位写成 `<主机名>`/`host`，未落真实值。
+- 残留 `tab`／`顶栏`／`三列点阵` 字样已逐条核对：`AGENTS.md` 里剩下的 8 处全是**历史标注或作废说明**（如「原『顶部工具 tab 栏』结构作废」「取代原顶部 tab 栏」），无与新结构矛盾的活条款。
+- 未做：`go test -race`（本机 TSAN 仍受 VMA 限制，同验证 16/23/25）；本次无代码变更，交由 CI 在后续代码步骤覆盖。
+
+## 2026-10-12 · M8 第 2 步：`internal/sysstat` 采集包（系统状态数据源）
+
+- 新增 `internal/sysstat`（7 个源文件 838 行 ＋ 7 个测试文件 1101 行、47 个用例）：`Collector{Root}` 复用并保存上次原始计数，`Read()` 一次采样。CPU（`/proc/stat` 求差、guest/guest_nice 不重复计、核数按 `cpuN` 行数、离线核按 0% 记以保住核号对齐）、负载、运行时长、内存与 Swap（**used = MemTotal − MemAvailable**；`MemAvailable` 缺失退回 `MemFree+Buffers+Cached`，连 `MemFree` 都没有就不猜）、网络（名字过滤 ＋ `operstate` 二次过滤 ＋ 默认路由选主网卡 ＋ 计数器回绕按 0）、磁盘（只留整盘设备、扇区 ×512、util 用第 13 列并钳到 100）、挂载点（fstype 白名单 ＋ `st_dev` 去重 ＋ 八进制转义解码）、温度（优先 type 含 soc/cpu 的 zone，符号链接 zone 也能读）。**单项失败 → `HasData=false`，不是错误**；只有 `Root/proc` 不存在才返回 error。
+- 测试留了两个缝：`Collector.statfs`（fixture 里的挂载点在真实文件系统上不存在）与 `Collector.now`（固定两次采样间隔，速率断言不必用容差）。fixture 形状取自目标机实测：12 个网卡（含 docker/veth/br 噪声）、9 行 diskstats（含 loop/ram/zram/mtdblock/dm-/分区）、7 行 mounts（含同设备 bind mount 与带 `\040` 的路径）、7 个 thermal zone。
+- 实现中改正了两条调研结论（已回写 `FINDINGS.md §7.3/§7.4`）：① `/proc/net/route` 的 **Metric 是十进制**（Destination/Gateway/Mask 才是 `%08X` 十六进制），按十六进制解析会在多条默认路由时选错网卡；② `/var/log`（`zram1`，fstype `ext4`）**会**被白名单保留——先前 FINDINGS 写「不在白名单，自然滤掉」是错的（白名单只看 fstype）。
+- 磁盘百分比口径改成 df 的 `used/(used+avail)`：`used/total` 会系统性偏低（ext4 默认给 root 保留 5%），磁盘快满时差得最多，而用户就是拿 df 对数的。渲染时对磁盘百分比向上取整以对齐 df（其余指标四舍五入），已记进 FINDINGS §7.4。
+
+### 验证 27：单测 ＋ 真实对数 ＋ 静态检查 — PASS（race 受环境限制）
+
+- `gofmt -l cmd internal scripts` 无输出；`go mod tidy` 后 `git diff --exit-code -- go.mod go.sum` 无 diff（**零新依赖**）；`go vet ./...` OK；`go test -count=1 ./...` 九个包全 `ok`（`internal/sysstat` 47 个用例）。
+- 双架构交叉编译 `CGO_ENABLED=0 GOOS=linux GOARCH={amd64,arm64} go build -trimpath ./cmd/wl` 均 OK（`syscall.Stat_t.Dev` 与 `Statfs_t.{Bsize,Blocks,Bfree,Bavail}` 两边字段名一致）。
+- `go test -race ./internal/sysstat/` 本机仍 `FATAL: Found 39 - Supported 48`（TSAN/VMA 环境限制，同验证 16/23/25），交 CI 跑。
+- **真实对数**：临时探针 `WL_REAL=1 go test -run TestRealMachineProbe -v`（对真实 `/proc` 采两次样、间隔 2 秒），**跑完已删除该文件、未入库**。
+
+  | 指标 | 采集器输出 | 系统命令 | 结论 |
+  | --- | --- | --- | --- |
+  | 核数 | 8 | `nproc` → 8 | 一致 |
+  | CPU | 总 5.1%、每核 `[9 2 4 6 13 4 2 2]` | `/proc/loadavg` → 0.55 0.51 0.57 | 量级相符（低负载） |
+  | 运行时长 | 530h41m33s | `uptime -p` → up 3 weeks, 1 day, 2 hours, 41 minutes | 一致（22 天 2h41m） |
+  | 内存 | total 7.50G / used 4.36G / avail 3.14G / cache 2.91G → 58.2% | `free -h` → 7.5Gi / 4.4Gi / 3.2Gi / 2.9Gi | 一致（`MemFree` 只有 389Mi，验证了必须用 `MemAvailable`） |
+  | Swap | 3.75G / 1.59G → 42.4% | `free -h` → 3.8Gi / 1.6Gi | 一致 |
+  | 网络 | 12 个接口过滤后只剩 `enp1s0`（primary=true），累计 ↓32.84G ↑21.98G | `ip -s link show enp1s0` → RX 35262736858 / TX 23599851846 字节 | **完全一致** |
+  | 磁盘 I/O | 只剩 `nvme0n1`（分区/loop/ram/zram/mtdblock 全滤掉），util 1.0% | `iostat -dx 1 2 nvme0n1` 末列 `%util` → 1.00 | **完全一致**（含 util 口径） |
+  | 挂载点 | `/` 21.17G/231.37G 9.2%、`/boot` 0.18G/1.00G 17.7%、`/var/log` 0.06G/0.18G 34.0%（bind mount `/var/log.hdd` 已去重） | `df -h` → 232G/22G/10%、1022M/181M/18%、188M/59M/35% | 绝对值一致；百分比差 1 是 df 向上取整（见上） |
+  | 温度 | 39.769 °C（soc-thermal） | `cat /sys/class/thermal/thermal_zone0/{type,temp}` → `soc-thermal` / `39769` | 一致 |
+
+- 本步只加新包、尚未接线（`internal/app` 仍是旧 tab 结构，`internal/gauge` 仍在），二进制行为不变 → 不重打包、不装 deb。
+
+## 2026-10-12 · M8 第 3 步：`internal/chart` 渲染原语 ＋ 样张过目
+
+- 新增 `internal/chart`（5 个源文件 540 行 ＋ 5 个测试文件 653 行、34 个用例）：
+  - `Canvas`：braille 画布（每格 2 列 × 4 行点，y 轴自下而上）。`Plot(values, slots, min, max, series)` 在相邻样本间线性插值，画出来是连续曲线而不是一串孤点；**最新样本贴右边缘、样本间距按 slots（历史环容量）算**，所以刚启动时曲线从右侧生长，不会被拉伸成「看起来已经跑满 2 分钟」。每格记住自己属于哪条序列，双序列（网络 ↓↑、磁盘读写）各染各的色、互不覆盖。
+  - `MeterH`（横向 3 态：空 / `⡇` 半 / `⣿` 满，每格 2 级）与 `MeterV`（竖向每行 4 级 `⣀⣰⣼⣿`，每核一条）；**非 0 值至少亮半格/一级**，否则 0.4% 和 0% 长得一样。
+  - `Frame`：圆角线框、标题嵌在上边框左侧、当前值靠右，输出恰好 height 行 × width 格；宽度不够时先丢值、再截标题（带 `…`）、极窄只留横线。
+  - `FitFields`（超宽时**从右边成对丢字段**，不是截断）、`ClampLines`/`clampTo`/`padTo`、`PctStyle`（≥85 红 / ≥60 琥珀 / 其余蓝，与原三列点阵同一套阈值）。
+  - 格式化：`Bytes`（<1024 带 `B` 单位）、`Rate`、`Pct`（四舍五入）、`PctCeil`（只有磁盘用，对齐 df）、`Dur`、`Temp`、`Load`、`NiceCeil`/`AutoMax`（自动量程圆整到 1/2/5×10ⁿ）。
+- **样张**：临时探针 `WL_SAMPLE=1 go test -run TestSamplePage`，用**真实** `/proc` 读数 ＋ 模拟历史曲线渲了 4 种尺寸（100×28 全开、100×28 两个用量面板都关、60×24、100×14）；跑完已删、未入库。结论：**braille 字形在用户终端正常显示**（曲线、计量条、线框都对），线框不折行；开 4 个 `yes` 制造负载后 CPU 总占用 51–52%、每核显示 4 条 `⣿` ＋ 4 条 `⣀`、温度从 39 °C 升到 50 °C，与负载相符；关掉两个用量面板后上面四块自动变高、不留空白（用户第 5 点）。
+- 样张暴露的 4 个问题已回写 `PLAN.md M8.3` 第 9–12 条：① 自动量程要有下限（否则 ↓249 B/s 的空闲链路被放大成满屏曲线，看着像出事）；② 行高要按面板实际需要收敛（用量行只需 5 行，按权重分到 6 行就在底部留空白）；③ 宽度不足时丢字段而不是截数字（样张里出现过 `21G/231G 10`，百分号被截掉比整段不显示更糟）；④ `Bytes` 对 <1024 要带单位（否则「量程 500/s」看不出是字节）。
+- 另修一处线框缺陷：标题后少一个空格（`╭─ CPU───` 应为 `╭─ CPU ───`）。
+
+### 验证 28：单测 ＋ 静态检查 ＋ 双架构 ＋ 样张 — PASS（race 受环境限制）
+
+- `gofmt -l cmd internal scripts` 无输出；`go mod tidy` 后 `go.mod`/`go.sum` 无 diff（**零新依赖**）；`go vet ./...` OK；`go test -count=1 ./...` 十个包全 `ok`（`chart` 34 例、`sysstat` 47 例）。
+- 双架构交叉编译 `CGO_ENABLED=0 GOOS=linux GOARCH={amd64,arm64} go build -trimpath ./cmd/wl` 均 OK。
+- `go test -race` 本机仍 `FATAL: Found 39 - Supported 48`（TSAN/VMA 环境限制，同验证 16/23/25/27），交 CI 跑。
+- 样张已贴给用户过目；**字形是否可接受由用户拍板**，若终端字体缺 braille 字形，按 `PLAN.md M8.7-1` 只换字形映射表退回方块字符。
+- 本步仍只加新包、未接线，二进制行为不变 → 不重打包、不装 deb。
+
+## 2026-10-12 · M8 第 4 步：`internal/grid` 行式网格布局
+
+- 新增 `internal/grid`（280 行 ＋ 309 行测试、11 个用例）：**纯几何、不依赖 lipgloss**，所以「不留空白」这件事能用位图证死。`Layout(width, height, rows) []Placement`，每块面板给一个矩形；`Panel` 有三个高度：`MinH`（完整形态）、`FloorH`（退化成「标题＋1 行数值」的下限）、`WantH`（内容够用就行，0 = 不设上限），加一个 `Weight`。
+- 规则实现（章程 A9 / PLAN M8.3）：空行删掉；行内均分宽度、余数从左到右 +1（右侧不留空洞）；`width < 60` 拆成单列堆叠；行高先按 `FloorH` 保底，再按权重用**最大余数法**长到 `MinH`，然后按 `WantH` 收敛（用量行只要 5 行，多分的还回去），最后仍有剩余就按权重摊掉，保证 `sum(heights) == height`；连 `FloorH` 之和都超过 `height` 才返回 `nil`（调用方进紧凑模式）。最大余数法的余数比较用整数、同余数按序号小的优先，所以结果确定、不依赖 map 迭代顺序。
+- 高度不够时行高自然落在 `FloorH` 与 `MinH` 之间（面板自己按高度降级），不需要「先按 MinH 试一遍再按 FloorH 试一遍」两趟。
+
+### 验证 29：单测 ＋ 静态检查 ＋ 双架构 — PASS（race 受环境限制）
+
+- `gofmt -l cmd internal scripts` 无输出；`go mod tidy` 无 diff（零新依赖）；`go vet ./...` OK；`go test -count=1 ./...` 十一个包全 `ok`；双架构 `CGO_ENABLED=0` 交叉编译 OK。
+- `go test -race ./internal/grid/` 本机仍 `FATAL: ThreadSanitizer: unsupported VMA range` / `Found 39 - Supported 48`（同验证 16/23/25/27/28，环境限制），交 CI 跑。
+- 关键用例：
+  - `TestLayoutFillsViewportExactly`：7 种尺寸（120×40、100×28、80×24、60×20、60×14、100×12、61×30）× 3 种可见性组合，用**占用位图**逐格断言「不越界、不重叠、空洞数恰好等于面板之间的 `ColGap` 间隙」——21 组全过。这就是「关掉面板后空位被吃掉、不留空白」的硬证据。
+  - `TestHiddenProviderReflowsWithoutHoles`：关一个提供商 → 那块占满整行宽（100 格）、行高不变（行还在）；关两个 → 整行删除，CPU 行变高，且 CPU 底边与网络顶边严格相接（中间不会留空行）。
+  - `TestWantHReclaimsUnusedHeight`：20 行高里用量行拿 5 行、CPU 行吃掉其余 15 行（样张 A 底部那 3 行空白的修法）。
+  - `TestSingleColumnBelowThreshold`：宽 59 → 6 块各自独占一行且从上到下排列；宽 60 → 仍是两块一行。
+  - `TestDegradesBetweenFloorAndMin`：高 12 喂不饱 `MinH`（7+6+5=18）但够 `FloorH`（9）→ 行高落在两者之间且和为 12。
+  - `TestNilWhenEvenFloorDoesNotFit`：59×12（单列 6 块 ×3=18）与 100×6 都返回 `nil` → 调用方进紧凑模式。
+  - `TestLayoutIsDeterministic`：同一输入连跑 20 次结果逐字节相同。
+- 本步仍只加新包、未接线，二进制行为不变 → 不重打包、不装 deb。
+
+## 2026-10-12 · M8 第 5 步：`internal/monitor` 系统状态页
+
+- 新增 `internal/monitor`（`monitor.go` 269 行 ＋ `view.go` 509 行 ＋ 测试 538 行、21 个用例）：
+  - **状态与生命周期**：`Collector` 每秒采样（包内私有 `tickMsg`，与 usage/cmdusage 的 tick 类型不同，三条链互不串台）；`history` 六条环形缓冲（cpu/mem/rx/tx/read/write，各 120 点）；**没有数据的采样不入队**，曲线从右侧生长而不是画出假的 0；采样**同步**做（一次就是几个小文件、微秒级），不开 goroutine 是为了采集器的「上次计数」没有竞争（CI 跑 `-race`）；整体采样失败时**保留上一屏数据**、状态栏报错，不整屏变空。
+  - **子模型**：持有 `usage.Model` 与 `cmdusage.Model`，非 tick 消息一律转发（轮询、倒计时、`R` 刷新都在各自包里，一行没改）；`Refresh(commandCode bool)` 给框架在设置页保存后调用；`SetVisibility(oc, cc)` 给框架在勾选框切换后调用。
+  - **渲染**：`Lines(w,h)` → `grid.Layout` → 逐面板渲染 → `compose` 按矩形拼屏（同行横向拼接、行间纵向相接）。六个面板各自按高度降级：CPU（曲线 → 每核竖条 → 核数行；核数太多时按可用宽度截断并标「+N 核未显示」）、内存（曲线 → 缓存/可用 → Swap 计量条）、网络（双序列曲线 ＋ 量程 ＋ 累计）、磁盘（曲线先砍、挂载点后砍、`/` 永远保留）、两个用量面板（三窗计量条 → 单行摘要取百分比最高的一窗）。`grid` 返回 nil 时进**紧凑模式**：每面板 1 行数值、无线框、返回自然高度交框架滚动。
+  - **状态栏**：可见提供商有问题（缺配置/401/403/网络）时**优先**显示它，配置类文案带完整配置路径（改写后的 A4）；否则 `CPU 12% · 内存 58%`；采集整体失败显示「系统状态不可用」（严重度 2）。
+- `internal/chart` 补 `Countdown`（从即将删除的 `gauge` 移过来，格式不变：`--`/`now`/`3d11h`/`3h11m`/`15m`），并把 `clampTo`/`padTo` 导出为 `ClampTo`/`PadTo`（拼屏要用）。
+- `internal/usage` 与 `internal/cmdusage` 各加一个 `snapshot.go`：导出 `Labels` 与 `Snapshot()`（三窗指针 ＋ 面板内短提示 `Notice` ＋ 状态栏文案/短文案/严重度）。**纯新增**，两个包的 `view.go` 与轮询状态机一行没动，所以 `internal/app` 仍能编译（删除留到第 6 步）。
+- 自动量程下限按第 3 步的结论落地：网络 1 KiB/s、磁盘 64 KiB/s；实测空闲机器上磁盘显示 `读0B/s 写0B/s` ＋ 一条贴底直线，而不是被放大成满屏曲线。
+
+### 验证 30：单测 ＋ 真实预览 ＋ 静态检查 — PASS（race 受环境限制）
+
+- `gofmt -l cmd internal scripts` 无输出；`go mod tidy` 无 diff（零新依赖）；`go vet ./...` OK；`go test -count=1 ./...` **十二个包全 `ok`**（monitor 21 例、grid 11 例、chart 35 例、sysstat 47 例）；双架构 `CGO_ENABLED=0` 交叉编译 OK；`-race` 本机仍 `FATAL: ThreadSanitizer: unsupported VMA range`（同验证 16/23/25/27/28/29），交 CI。
+- 关键用例：
+  - `TestLinesNeverWrap`：10 种宽（20–200）× 9 种高（1–40）× 4 种可见性 = **360 组**，断言每行可见宽度不超过终端宽度；图表模式下还断言**恰好等于**终端宽度（短了右侧会留空洞）。
+  - `TestChartModeFillsHeight`：100×28／80×24／120×40／60×20 都恰好铺满高度。
+  - `TestCompactModeWhenNothingFits`：59×12 → 6 行纯数值、无线框、CPU/内存/网络/磁盘/两个提供商都在。
+  - `TestHiddenProviderIsAbsent`：关掉的面板不渲染；整行关掉后仍铺满 28 行、底部没有空行堆着。
+  - `TestPageShowsSampledValues`：页面里能读到 `42%`、`4.0G/8.0G`、`网络 enp1s0`、`↓50K/s`、`累计 ↓35G ↑23G`、`磁盘 nvme0n1`、`21G/231G 10%`（df 口径向上取整）、`每核`、`最高 100%`、`8 核`。
+  - `TestNoDataPage`：什么都没采到时不 panic、显示 `[--]`、不出现假数值。
+  - `TestUsagePanelWindowsAndDegradation`：完整形态三窗齐全；高度不够退成 `5h 62% · 3h11m` 单行摘要；宽 22 时仍保住 `62%`（不把数字截一半）；无数据的窗显示 `[--]`；出错时面板内显示 `Key 无效（401）`。
+  - `TestDiskPanelAlwaysKeepsRoot`：高度只剩 1 行时留的是 `/`，`/boot` 被砍。
+  - `TestStatusTextPrefersProviderProblems`：缺 key 时状态栏是「未配置 Key：…/config.json」（含路径）、短状态 `未配置`；关掉两个提供商后回到 `CPU 42% · 内存 50%`。
+- **真实预览**（临时探针 `WL_PREVIEW=1`，真实采集 ＋ 回填历史；跑完已删、未入库）：100×28（两个提供商都开／都关）、80×24、59×20（单列堆叠 6 块）、59×12（紧凑模式 6 行）五种形态都正常，线框对齐、无折行；空闲时网络 `量程 1.0K/s`、磁盘 `量程 64K/s` 下限生效。
+- 测试自己抓到一个判别错误：原本用「行数 == height」判断图表模式，但紧凑模式也可能恰好出 h 行（20×4 就是），已改成直接问 `grid.Layout(...) != nil`。
+- 本步仍未接线（`internal/app` 还是旧 tab 结构、`internal/gauge` 还在），二进制行为不变 → 不重打包、不装 deb。
+
+## 2026-10-12 · M8 第 6 步：界面切换（app 改两视图、用量包去渲染化、删 `internal/gauge`）
+
+- `internal/app` 重写为**两视图切换器**：标题栏（第 0 行）＋ 内容区 ＋ 状态栏。删掉 tab 那一整套（`tabSpan`/`tabPlan`/`tabPlanFor`/`tabLayoutFor`/`stepTab`/`visibleTabs`/`shortName`/`lastWords`/`renderTabBar`/`tabLabel`、`1`–`9` 直达、`←`/`→`/`Tab` 切换、`toolNames`/`active`/`showOpenCode`/`showCommandCode`）。新增：`s`/`S` 与右上角按钮进设置页、非编辑态 `Esc` 返回；标题栏左侧 `with-linux · 主机名 · 温度 · 已运行 X · 负载`（后三项来自 `monitor.Title()`，主机名 `os.Hostname`，取不到时退 `localhost`），逐级降级顺序＝负载 → 运行时长 → 主机名 → 程序名、**温度保留到最后**；按钮降级 `[ 设置 s ]` → `[ 设置 ]` → `[s]`，命中区间与渲染共用同一份计算（按钮右对齐贴最右列）。`SavedMsg` 改为转成 `monitor.Refresh(commandCode)`，`TogglesChangedMsg` 改为 `monitor.SetVisibility`。
+- 标题栏降级抽成**纯函数** `titleFields(base, avail)`：不依赖本机有没有 thermal zone，CI runner 上也能测（否则这类断言只能在目标机上跑）。
+- `internal/usage` / `internal/cmdusage` **去渲染化**：删掉各自 `view.go`（三列点阵映射、`noKeyLines`、`Lines`），只留取数、轮询状态机、错误文案与 `Snapshot()`/`Labels`。
+- **删除 `internal/gauge` 整包**（`gauge.go` 431 行 ＋ `gauge_test.go` 196 行）：旧三列点阵画法作废，不留兼容壳。
+- `internal/app/app_test.go` 重写：旧 tab 用例大部分作废，新写 24 个（视图切换与 Esc/q、按钮命中与右对齐、标题栏降级、状态栏降级、三段式整屏、内容铺满不滚动、滚轮/resize、R 转发、旧 tab 键不再切视图、编辑态让位、保存 key 后面板自动出现、开关关掉后面板消失并重排、进出设置页不动用量状态、设置页居中/滚动/鼠标命中）。
+- 受影响单测改为断言 `Snapshot()`：`usage.TestBrokenConfigShowsSpecificStatusAndPanel`、`cmdusage.TestMissingAndBrokenConfig`、`cmdusage.TestLinesWithKeyButNoData` → `TestSnapshotWithKeyButNoData`。**面板内不再显示 `.bak` 备份提示与 JSON 字段名**（5 行的小面板放不下）：备份行为不变，只是文案位置变了（新 A4：面板给短提示＋`S 设置`，状态栏给完整路径）。
+- `internal/settings`：`Hints()` 非编辑态改为 `Q 退出 · Esc 返回 · Enter 编辑 · 空格 开关`。
+
+### 验证 31：单测 ＋ 静态检查 ＋ 双架构 ＋ pty 真实运行 — PASS（race 受环境限制）
+
+- `gofmt -l cmd internal scripts` 无输出；`go mod tidy` 无 diff（零新依赖）；`go vet ./...` OK；`go test -count=1 ./...` **11 个包全 ok、223 个用例**；双架构 `CGO_ENABLED=0` 交叉编译 OK；`-race` 本机仍 `FATAL: ThreadSanitizer: unsupported VMA range`（同验证 16/23/25/27–30）。
+- `git diff --stat -- internal cmd` → `11 files changed, 714 insertions(+), 1686 deletions(-)`（净删 972 行：删掉 `gauge` 整包与两个 `view.go`，换上新 `app`）。
+- **pty 真实运行**（`/tmp/wlpty.py`：`pty.fork` ＋ `TIOCSWINSZ` 给尺寸，再重建字符网格；配置走临时 `XDG_CONFIG_HOME` ＋ 明显假 key，真实配置未碰）：
+  - **100×28**：标题栏 `With Linux · <主机名> · 38°C · 已运行 29d0h · 0.25 0.57 0.63` ＋ 右上 `[ 设置 s ]`；三行网格，行高实测 **11/10/5**——与 grid 的最大余数法 ＋ WantH 收敛算出来的一致（用量面板只要 5 行，多出来的给了上面两行，底部不再留空白）；假 key 得 **401**，两个面板内显示 `Key 无效（401）`、状态栏右侧也优先显示它（A3）；CPU/内存/网络/磁盘都是本机真实读数。
+  - **设置页**（按 `s`）：线框表单、`[ ] OpenCode Key`／`[ ] Command Code Key`（未设置）、配置文件路径、关于区块（本地构建没注入 ldflags，版本回退到 Go 构建信息 `v0.3.1-0.2026…+dirty`）、状态栏 `设置 · Q 退出 · Esc 返回 · Enter 编辑 · 空格 开关`。
+  - `Esc` 返回系统状态页 ✓；`q` 退出码 **0** ✓；80×24 同样正常（三行网格、用量面板在最后一行）。
+- 抓屏工具踩到一个坑，记下来备用：**Bubble Tea 用 `ESC[X`（ECH，擦除 n 个字符）做增量重绘**，重建器不处理它就会留下上一帧的残影（一度误判成「401 提示重复了两行」，实际是残影；不抖窗口尺寸重抓就正常，单测也证明提示只渲染一次）。切视图后只有变化的格子被重画，所以**版式正确性要靠单测断言，不能靠抓屏截图**。
+- 新写的两个用例先失败后修正，都不是产品缺陷：① 断言设置页内容时把「内容行号」和「终端行号」混用、重复加了居中偏移（`contentStart()` 在内容不足一屏时是负数）；② 用 `TogglesChangedMsg` 伪造可见性，而进设置页会 `Reload()` 重读配置——真实流程里开关是写回配置文件的，改成写配置文件后两边一致。
+
+## 2026-10-12 · M8 第 7 步：README 与 CHANGELOG
+
+- `README.md` 功能段重写：系统状态（四块面板 ＋ 标题栏三项）、AI 用量（底部两个小面板、可关）、设置（`s`／右上角按钮、`Esc` 返回、勾选框控展示）；界面描述改为「标题栏 ＋ 系统状态网格 ＋ 底部状态提示」并补降级规则。
+- `CHANGELOG.md` 的 `[Unreleased]` 重写为「v0.3.0 → 现在」的净变化：**Added**（A8 系统状态页、A9 布局自适应、标题栏、A7 改写后的展示开关）、**Changed**（结构重构、设置页入口/返回、缺 key 提示位置、标签改名、用量包去渲染化）、**Removed**（顶部 tab 栏、`internal/gauge` 整包）。**删掉一条已失效的 Fixed**（「100% 点阵整列填满」）——那是同一未发布周期内对旧画法的修正，旧画法本身已经删除，写进变更日志会让人以为现在还有点阵。
+- `AGENTS.md` 的状态栏提示文案与实现对齐：设置页非编辑态 `Q 退出 · Esc 返回 · Enter 编辑 · 空格 开关`、编辑态 `Q 退出 · Enter 保存 · Esc 取消`。
+
+### 验证 32：文档一致性与全量测试 — PASS
+
+- `gofmt -l cmd internal scripts` 无输出；`go vet ./...` OK；`go test -count=1 ./...` 11 个包全 ok（223 例）。
+- `grep` 核对 `README.md`／`CHANGELOG.md` 里的 `tab`／`三列点阵` 字样：README 已无；CHANGELOG 剩下的命中都在**历史版本条目**与新写的 Removed/Changed 里（即「去掉了什么」），没有把旧结构当成现状。
+- `git diff --stat`：17 个已跟踪文件、`1112 insertions(+), 1736 deletions(-)`；另有 4 个未跟踪新包（`chart`/`grid`/`monitor`/`sysstat`）。
+
+## 2026-10-12 · M8 第 8 步：本机真实验证（与系统命令对数）
+
+- 用 **tmux**（成熟终端模拟器）跑真实二进制并 `capture-pane` 抓屏：100×28 下三种形态都正确——① 空配置 → 两行网格（13＋13 行），边框齐全；② 只开 OpenCode → 第三行整行 100 格宽，状态栏 `未配置 Key：/tmp/wl-none/with-linux/config.json`（新 A4）；③ 两个都开 → 三行 11/10/5，与 grid 的 WantH 收敛一致。
+- **负载对数**（4 个 `yes`）：标题 CPU 52%、每核 **4 条 `⣿` ＋ 4 条 `⣀`**；同时刻 `mpstat -P ALL 1 1` 显示 4/5/6/7 号核 idle = 0%、0–3 号核 87–92% —— **每核竖条与 mpstat 逐个吻合**；总占用 52% vs mpstat 的 55%（采样时点差）；温度 39 °C → 53 °C（标题值在上升过程中，读数 53615 毫度在抓屏后 1–2 秒）。
+- 其它对数：内存 4.9/7.5G 66% ↔ `free -h` 4.8Gi/4.9Gi；Swap 224M/3.8G ↔ `free` 224Mi/3.8Gi；`/` 24G/231G 11%、`/boot` 181M/1022M 18%、`/var/log` 108M/187M 63% ↔ `df -h` 同值；网络 `enp1s0` 累计 ↓53G ↑35G ↔ `ip -s link` 同量级（速率在 1 K/s–80 K/s 之间波动，与 1 秒实测速率同量级）；温度 ↔ `thermal_zone0`。
+- **40×12 紧凑模式**：5 行纯数值、无线框（CPU/内存/网络/磁盘/OpenCode），状态栏降级为 `系统状态 · Q 退出` ＋ `未配置`。
+- **设置页**：`tmux send-keys s` → 线框表单、`[✓] OpenCode Key`（因为配置里 `showOpenCode: true`）、配置文件路径、关于区块；`Escape` 返回系统状态页 ✓；`q` 后 tmux 会话消失（程序退出）✓。
+
+### 修复：尺寸未知时的首帧导致旧布局残留（真实缺陷，第 8 步发现）
+
+- 现象：抓屏里 CPU 面板的下边框位置出现了**上一帧网络面板的标题栏**。分帧检查证明 app 自己的每一帧都是对的（首帧 28 行、13/13 布局、边框齐全），问题出在 Bubble Tea 的增量重绘：`New()` 里 `width/height` 初值是 `80×24`，在真实 `WindowSizeMsg` 到达前先按 80×24 画了一帧；尺寸变成 100×28 后它只补差异格子，旧布局里「网络标题栏」那一格被判定为未变化，就留在了新布局的「CPU 下边框」位置。
+- 改法：`New()` 的尺寸初值改为 **0**（尺寸未知就不画内容），并在 `WindowSizeMsg` 时返回 `tea.ClearScreen` 强制整屏重绘（窗口尺寸变化后旧字符不会自己消失）。
+- 验证：`gofmt`／`go vet`／`go test -count=1 ./...` 全过（app 24 例）；tmux 抓屏在 100×28／40×12、三种可见性组合下都不再有残留。
+
+### 抓屏工具的教训（已写进 FINDINGS §2.2）
+
+- 手写 ANSI 重建器不可靠：补了 ECH（`ESC[X`）之后仍然会被 Bubble Tea 的增量移动/滚动优化绕进去；**pyte 也会误判**（同一个字节流，pyte 重建出残影、tmux 完全正确）。**结论：pty 冒烟一律用 tmux `capture-pane` 抓屏。**
+- `tmux new-session` 不会继承客户端的 `XDG_CONFIG_HOME`（只转发 DISPLAY/SSH_* 等少数变量），必须把环境变量写进 `-c` 命令里，否则会读到真实配置（本次误用真实 key 发了两条只读 GET，未做任何写操作；之后的冒烟都改成命令内显式赋值）。
+
+## 2026-10-12 · M8 第 9 步：打包安装 ＋ 已安装程序冒烟
+
+- `VERSION=0.4.0~dev bash scripts/mkdeb.sh arm64` → `dist/with-linux_0.4.0~dev_arm64.deb`（2.35 MB）。
+  版本取 `0.4.0~dev` 是因为本次是**破坏性结构变更**（去 tab 栏、删 `internal/gauge`），按语义化版本应当进 0.4.0；正式版本号仍由用户发版时决定。
+- `sudo apt install --reinstall` → `Unpacking with-linux (0.4.0~dev) over (0.3.1~dev)` / `Setting up with-linux (0.4.0~dev)`；`wl --version` → `wl 0.4.0~dev`；`dpkg -V with-linux` 无输出；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` sha256 同为 `490c3d97…`。
+- **已安装程序冒烟**（`/tmp/wl_smoke.sh`，tmux 起会话 ＋ `capture-pane`，一律临时 `XDG_CONFIG_HOME`）：**29 PASS / 0 FAIL**
+  - S1 空配置 100×28：标题栏（程序名/温度/`[ 设置 s ]`）、CPU/内存/网络/磁盘四块面板、状态栏提示；**没有顶部 tab 栏**、两个提供商面板都不出现。
+  - S2 只开 OpenCode：面板出现、提示 `未配置 Key · S 设置`、状态栏给完整配置路径、Command Code 仍关闭。
+  - S3 两个都开（假 key）：两块都在，得到 `Key 无效（401）`／`无权限（403）` 且不崩溃。
+  - S4 `s` 进设置页：`设置` 标题、两行 key、`关于`、版本 `0.4.0~dev`、状态栏 `Esc 返回`；`Esc` 回到系统状态页且 CPU 面板还在。
+  - S5 40×12：紧凑模式（无框、每面板 1 行数值），磁盘行仍在。
+  - S6 `q`：会话退出。
+
+### 验证 34：全量静态检查与测试（装后复跑）— PASS
+
+- `gofmt -l cmd internal scripts` 无输出；`go mod tidy` 无 diff；`go vet ./...` OK；`go test -count=1 ./...` 11 个包全 ok、**223 个用例**；双架构 `CGO_ENABLED=0` 交叉编译 OK。
+- `go test -race` 本机仍 `FATAL: ThreadSanitizer: unsupported VMA range`（同验证 16/23/25/27–31），交 CI。
+- 工作区：`AGENTS.md`/`FINDINGS.md`/`PLAN.md`/`PROGRESS.md`/`README.md`/`CHANGELOG.md` ＋ 代码改动（17 个已跟踪文件、4 个新包）；**尚未提交**，等用户指令。
+
+## M8 收尾状态
+
+- A1/A2/A3/A4/A5/A6/A7 的改写、新增 A8/A9 全部实现并有对应单测；`AGENTS.md` 章程已按 M8.6 的 14 条改完。
+- 新增包：`sysstat`（采集）、`chart`（braille 原语）、`grid`（布局）、`monitor`（系统状态页）；删除 `gauge`；`usage`/`cmdusage` 去渲染化。
+- 已知遗留：① `go test -race` 在本机跑不了（TSAN/VMA，CI 覆盖）；② 本机没有第二个终端尺寸的真实 SSH 客户端，宽高组合靠 tmux 多尺寸 ＋ 单测矩阵验证；③ 发版（tag / GoReleaser）未做，按项目惯例由用户指令触发。
+
+## 2026-10-12 · 界面按 btop 再调（用户四项指令）
+
+- 指令：① 设置按钮里不要有 `s`、挪到右下角，右下角原来的 CPU/内存信息不要了；② 温度/运行时长/负载从左下角（原文如此，实为标题栏左侧）移到右上角；③ 计量条用实心的、参考 btop；④ CPU 面板标题加型号、每核图表参考 btop 调整、网络面板的「量程」有无必要、整体布局按 btop（CPU 占一行、左下内存/磁盘、右上网络、右下 AI 用量）。
+- **标题栏**：左＝`with-linux · 主机名`，右＝`温度 · 已运行 X · 负载`；降级顺序不变（负载 → 运行时长 → 主机名 → 程序名，温度最后）。降级函数改成返回 (left, right) 两段，仍是纯函数。
+- **右下角按钮**：`[ 设置 ]`（无 `s`），设置页里变 `[ 返回 ]`；窄屏 `[设置]` → `[设]`；点击命中区间与渲染共用同一份计算。**状态栏正常时留空**（CPU/内存只在面板里出现），错误/保存状态文案出现在按钮左边；状态优先级改成「完整状态 > 快捷键提示」（冒烟发现配置路径曾被挤掉，A4 要求完整路径，已修并加单测）。
+- **实心计量条**（参考 btop 实测：它的磁盘条整条都是 `■`、CPU 核条整条 `⣀`，填充与轨道同形，只靠颜色区分）：横向计量条改成整条 `⣿`，填充亮色、轨道 dim(238)，按整格取整；删掉不再使用的竖向 `MeterV`（每核改横条后无调用）。
+- **CPU 面板**：标题在空间够时带型号（读 `/proc/cpuinfo` 的 `model name`/`Model`/`Hardware`/`Processor`，ARM SBC 上退到 `/proc/device-tree/model`；本机 `CPU Orange Pi 5`）；每核改成 btop 风格**横向条**：一行并排 2–4 个核（按内宽自适应），`C0 <bar> 15%  C1 …`，高度不够先砍核行数、必要时标「＋N 核未显示」；不再有「每核 / 最高 / 0% / 100%」那行。
+- **网络面板**：去掉「量程 xxx」——它只是自动量程的上界（曲线纵轴最大值），曲线本来就是相对高度，当前速率就在旁边；自动量程与下限逻辑保留。
+- **布局树**：`internal/grid` 从「行列表」升级为布局树（`Leaf`/`Row`/`Col`，列内按权重分配高度、行内均分宽度），页面结构＝`Col{ CPU, Row{ Col{内存,磁盘}, Col{网络, Row{OpenCode,CommandCode}} } }`；关掉提供商时该行不进树、网络吃掉右栏下部；宽度 <60 仍摊平成单列。`grid` 的旧测试重写为树版本（含 `TestBtopShape` 钉住结构、`TestWantHConvergence`、`TestHiddenProvidersCollapse`）。
+- **拼屏 bug（新布局暴露）**：`compose` 原来按「同一 Y 就是同一行」分组，嵌套布局里内存（Y=10,H=9）与网络（Y=10,H=13）同 Y 不同高，后画的整行覆盖先画的 → 页面上只剩 CPU 和网络。改成逐行扫描所有面板、按 X 排序拼接，并加注释说明为什么不能按 Y 分组。
+
+### 验证 35：全量测试 ＋ 装后 tmux 冒烟 — PASS
+
+- `gofmt` 无输出；`go vet ./...` OK；`go test -count=1 ./...` 11 个包全 ok（223 例）；双架构 `CGO_ENABLED=0` 交叉编译 OK。
+- 重新 `VERSION=0.4.0~dev bash scripts/mkdeb.sh` ＋ `sudo apt install --reinstall`；`wl --version` → `wl 0.4.0~dev`。
+- 对已安装 `/usr/bin/wl` 的 tmux 冒烟 **33 PASS / 0 FAIL**；100×28 实拍：CPU 整行（标题 `CPU Orange Pi 5`，每核 `C0 … C7` 两行横条）、左下内存/磁盘、右上网络、右下两个 AI 面板并排、状态栏最右 `[ 设置 ]`；带颜色抓包确认每核横条是「1 格亮 + 12 格 dim」（2%）而不是整条全亮。80×24 同样成立（每核 8 格条）。
+
+## 2026-10-12 · 按反馈修正画法与 CPU 信息（五项）
+
+- **CPU 型号**：之前取了 device-tree 的板名（Orange Pi 5）。改为优先 `/proc/cpuinfo` 的 model name/Model/Hardware，其次 `/proc/device-tree/compatible` 里**逗号后最短的一条**（SoC 名比板名短）→ 本机得到 `RK3588`；再退到 CPU part 映射（A53/A55/A76…）。实测 `CPUModel()` = `RK3588`。
+- **时间序列改成填充面积图**（用户：「我之前指的是上面折线图改成从上到下有填充的样子，类似柱状图」）：新增 `Canvas.PlotFill` / `chart.Fill`——每个点列从底填到插值高度，0% 保留一条基线；CPU、内存、网络、磁盘全部改用；双序列（网络 ↓↑、磁盘读/写）画成**上下两张**填充图（高度 <4 时只画第一张）。
+- **每核也改成随时间变化**（参考 btop）：`history` 增加每核一条环形缓冲（120 点），每核渲染成 1 行高的填充小图：`C0 <图> 15%  C1 …`，一行并排 2–4 个核（按宽度自适应）。
+- **进度条空位留白**（用户：「空的地方不要填充点阵」）：`MeterH` 去掉轨道字符，只在填充段画实心 `⣿`，其余补空格；`MeterV` 整段删除（已无调用）。
+- **计量条等宽**：内存/磁盘/用量面板都先算「标签列、数值列、百分比列」的最宽值，再统一计量条宽度——`总计/已用/可用/缓存/Swap`、每条挂载点、三个用量窗的条现在严格同宽（宽度不够时先丢次要列：内存丢总计/缓存/可用，磁盘丢「可用」，用量丢倒计时）。
+- **内存/磁盘信息更接近 btop**：内存面板改为 `总计 / 已用 / 可用 / 缓存 / Swap` 五行（各自带百分比与等宽计量条，按高度优先保留已用与 Swap）；磁盘面板最多列 5 个挂载点，每行给「路径、已用/总量、可用、等宽计量条、百分比」，上方是读/写两张填充图。
+- 顺带修：挂载点百分比曾被格式化成 `11%%`（`PctCeil` 已带 `%`，又拼了一个），已改。
+
+### 验证 36：全量测试 ＋ 装后 tmux 冒烟 — PASS
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 11 包全 ok；双架构交叉编译通过。
+- 重新打包安装（`0.4.0~dev`），对 `/usr/bin/wl` 冒烟 **33 PASS / 0 FAIL**。
+- 实拍 100×28：标题 `CPU RK3588`；每核两行 `C0 … C7` 小图；内存五行等宽条（总计/已用/可用/缓存/Swap）；磁盘三行挂载点（路径、已用/总量、可用、条、百分比）＋ 读写填充图；负载下 CPU 填充图从底往上实心、C4–C7 满格。
+
+## 2026-10-12 · 宽屏分栏与中线镜像图（用户两项指令）
+
+- **面板内部左图右明细**：`splitColumns(innerW, detailNeed)` 按各面板实际需要给明细列宽度（CPU 46、内存 36、网络 26、磁盘 44），图区至少留 24 格，不够宽就退回上下排。100×28 时只有 CPU（整行、内宽 96）会分栏；160×40 时内存/磁盘/网络也分栏（磁盘分栏后仍保留「可用」）。左右两段用 `zipColumns` 拼成同一高度。
+- **中线镜像面积图**：新增 `Canvas.PlotFillMirror` / `chart.FillMirror`——以垂直中线为基线，`up` 往上长、`down` 往下长；并抽出 `eachDotColumn` 复用插值逻辑。按用户拍板：CPU 上＝总占用、下＝最忙的那个核（`history` 新增 `coreMax` 环形缓冲）；网络＝上传 ↑ / 下载 ↓；磁盘＝读 ↑ / 写 ↓。窄屏和宽屏都用同一套镜像图。
+- **每核明细**：宽屏右栏按宽度每行放 1–4 个核（`C0 <图> 15%  C1 …`），高度不够时先减行数、再标「＋N 核未显示」；修了截断计数少算一个的 bug 和重复定义的 `coreDetailRows`。
+- 文档同步：A8 / 界面布局 / 统一画法 / README / CHANGELOG 都改成「镜像填充图 ＋ 宽屏左图右明细」。
+
+### 验证 37：全量测试 ＋ 装后 tmux 冒烟 — PASS
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 11 包全 ok；双架构交叉编译通过；装后冒烟 **33 PASS / 0 FAIL**。
+- 实拍 100×28（跑 25 秒让历史攒起来）：CPU 左图上下镜像（上半 ~54% 的总占用、下半最忙核 100% 填满），右栏 C0–C7 三行；内存/磁盘/网络窄屏仍是上下排（100 列时内宽 46，不满足分栏阈值）。
+- 实拍 160×40：内存左图右五行数值、磁盘左图右三行挂载点（含「可用」）、网络左图右速率与累计，均正确。
+
+## 2026-10-12 · 按 btop 截图再校（三项）
+
+- **内存面板**：宽屏分栏的明细列从 36 收到 28（图区保底从 24 降到 14，100×28 时内存也能左图右明细了）；明细补上 btop 的「空闲（Free）」行（`sysstat.Memory` 新增 `Free` 字段，读 MemFree）。
+- **镜像基线**：`PlotFillMirror` 的中线两侧基线各让 1 个点行（上基线 = mid+1、下基线 = mid-1），**值为 0 时只画自己那一行基线**，所以「读 0 / 写 0」「上传 0 / 下载 0」看起来是两行分开的点，中间空一行点（用户 2026-10-12 要求）。新增 `TestFillMirrorDirectionAndGap` 钉住方向与空隙。
+- **明细铺满高度**：新增 `spreadRows`——明细行数少于面板高度时在行间均匀插空行；CPU 每核明细、内存数值行、磁盘挂载点、网络统计都改用它；CPU 右栏优先一行一个核（放不下再每行 2–4 个）。
+- 网络宽屏统计改为多行（`↓ 下载` / `↑ 上传` / `累计 ↓` / `↑`），也纵向摊开。
+
+### 验证 38：全量测试 ＋ 装后冒烟 — PASS
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 11 包全 ok；双架构交叉编译通过；重打包安装 `0.4.0~dev` 后冒烟 **33 PASS / 0 FAIL**。
+- 实拍 100×28：内存左图右五行（总计/已用/可用/缓存/空闲/Swap 中按高度保留）、网络左图右四行统计、CPU 右栏 C0–C7 均匀铺开；空闲时磁盘镜像图是「上＝读基线、下＝写基线」两行点、中间一行空。
+
+## 2026-10-12 · 补：历史短时图表出现竖列空隙
+
+- 现象：网络/磁盘镜像图在历史没攒满（样本间距 >1 个点列）时，填充里会出现竖列空隙（`⡇  ⢸`）。
+- 原因：`eachDotColumn` 只在「样本落点」和「相邻落点之间的整列」画点，当两个样本的 x 相距不足 2 个点列时，中间的列被跳过。
+- 改法：改成**逐点列插值**——遍历最旧到最新样本之间的每个点列，找到它所在的区间做线性插值再回调（保证连续）；范围之外（历史还没到）保持空白。
+- 验证：`chart`/`monitor` 单测全绿；镜像样张（临时探针）确认 0/0 是两行分开的点＋中间一行空、50/0 上半填满＋下行基线、25/75 按比例；重装后冒烟 **33 PASS / 0 FAIL**。
+
+## 2026-10-12 · 再按 btop 细化（用户四项指令）
+
+- **内存/网络回到上下布局**（用户要求）：去掉这两个面板的内部左右分栏，图在上、明细在下；磁盘与 CPU 仍在宽屏时分栏。
+- **CPU 面板**：宽屏右栏改成 btop 结构——`用量 <meter> 53%` ＋ **两列多核**（左列 C0–C3、右列 C4–C7，每核 1 行历史图）＋ `温度 41°C · 负载 0.28 0.28 0.34`；窄屏则是图在上、两列多核与温度/负载在下。温度与负载从标题栏移到 CPU 面板（用户要求）。
+- **标题栏**：左侧改为 `with-linux · 主机名 · 已运行 X`，右侧改成**当前时间** `HH:MM:SS`（每 tick 更新）；温度/负载不再在这里。
+- **颜色**：CPU 用量条与百分比按阈值着色；每核百分比按自身占用着色；内存/磁盘/用量百分比文字也上色（原来只有计量条上色）；温度 <60 蓝 / <75 琥珀 / 其余红；负载 ≥核数 琥珀、≥2×核数 红；时钟亮色、其余标题信息暗色。
+- 内存面板的历史图保底 2 行（原来可能只剩 1 行），明细按优先级保留已用/Swap 等。
+
+### 验证 39：全量测试 ＋ 装后冒烟 — PASS
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 11 包全 ok；双架构交叉编译通过；重打包安装后冒烟 **33 PASS / 0 FAIL**。
+- 实拍 100×28：标题栏 `With Linux · host · 已运行 30d15h … 12:59:17`；CPU 右栏用量条＋C0–C3/C4–C7＋温度/负载；内存与网络上下布局；磁盘挂载点带「可用」与彩色百分比。
+
+## 2026-10-20 · M9 范围确认与章程/PLAN/FINDINGS
+
+- 用户确认：Docker 面板增加**日志查询**；Caddy 按建议**只做状态＋热重载**，不做启停；设置、Docker、Caddy 全部改为灰化背景上的居中弹窗；宽屏布局按「内存/磁盘/Docker/Caddy 一行，网络/AI 一行」重排。
+- `AGENTS.md`：重写 A1/A5/A8/A9，新增 A10；更新只读约束（唯三写操作）、数据获取（Docker/Caddy）、弹窗渲染与安全边界、设置/Docker/Caddy 弹窗规格、键位与窄屏回退。原独立设置视图和 `[ 返回 ]` 作废。
+- `PLAN.md`：M9 范围、布局、弹窗系统、数据模型、实施顺序、完成定义、章程清单与风险落盘。
+- `FINDINGS.md`：新增 §8（Docker Engine API 统计/日志/动作、Caddy admin API/systemd/reload、lipgloss Canvas 遮罩、120 列断点）。
+- **尚未改代码**；下一步 M9 第 2 步：弹窗遮罩原语 + 设置弹窗化。
+
+## 2026-10-20 · M9 完成：Docker/Caddy ＋ btop 布局 ＋ 弹窗化
+
+### 实现
+
+- **弹窗基建**：新增 `internal/overlay`，用 lipgloss v2 Canvas/Layer 把底层逐格灰化（前景 240、清按钮底色），再把弹窗居中覆盖；单测覆盖居中、宽字符/braille、背景保留与颜色保留。
+- **设置弹窗**：`internal/app` 从 `viewMonitor/viewSettings` 两视图改为「主页面 + modal 状态」；设置表单/保存/勾选框/「关于」移入弹窗，Esc 层级关闭，鼠标行与勾选框仍可用。
+- **新布局**：宽 ≥120 时 CPU 整行，下排上半内存/磁盘/Docker/Caddy、下半网络/AI；<120 回退旧两栏 + 两行无框服务摘要；<60 单列/紧凑滚动；AI 全关时网络吃满下排。
+- **Docker**：新增 `internal/docker`（Unix socket Engine API、版本协商、列表/one-shot stats、相邻样本 CPU%、内存扣 inactive_file、网络/块 I/O、启停/重启、TTY/非 TTY 日志拆帧与 200 行/256 KiB 上限、SGR/控制符清理）；`internal/monitor` 每 2 秒异步轮询并存储动作/日志状态。
+- **Caddy**：新增 `internal/caddy`（admin config/upstreams 摘要、只读 systemd 状态、`caddy reload` 假运行器测试）；`monitor` 每 5 秒轮询；不做启停/重启。
+- **Docker/Caddy 弹窗**：容器表 + 详情 + 启动/停止/重启（停止/重启二次确认）+ 日志视图（滚动、`/` 过滤、`r` 刷新、Esc 层级返回）；Caddy 状态 + 只读 systemd + 热重载；`d`/`c` 或点击服务卡/摘要条打开，鼠标可选容器、选操作、点 Caddy 重载。
+- **文档**：AGENTS A1/A4/A5/A7/A8/A9 重写、新增 A10 与弹窗规格；PLAN M9、FINDINGS §8；README/CHANGELOG；deb 描述更新。
+
+### 验证
+
+- `gofmt -l cmd internal` 无输出；`go vet ./...` 干净；`go mod tidy` 无 diff；`go test -count=1 ./...` **14 个测试包全绿**；`CGO_ENABLED=0` 交叉编译 amd64/arm64 通过。`-race` 仍受本机 TSAN/VMA 限制，按既有结论交 CI。
+- **真实只读验证**：120×30 实拍服务卡、四栏布局与 Docker 统计（与 `docker stats --no-stream` 的量级/内存一致）、真实容器日志视图与过滤；80×24 实拍两栏 + 两行服务摘要与弹窗。背景在 `capture-pane -e` 中已变为 240 灰，弹窗保留彩色。
+- **Caddy**：系统服务仅只读（admin API/路由/上游/systemd）；在临时 Caddy 实例上执行 `caddy reload --config … --force --address 127.0.0.1:2999`，退出码 0 且响应正常。未对系统 Caddy 执行热重载。
+- **未执行**：真实容器的启动/停止/重启（避免中断用户服务）；Docker fake socket 单测覆盖三动作、二次确认与错误文案。
+- **安装冒烟**：重打包安装 `with-linux_0.4.0~dev_arm64.deb`，对已安装 `/usr/bin/wl` 在 120×30 与 80×24 跑 tmux 冒烟 **28 PASS / 0 FAIL**（标题/四栏/服务卡/灰化/设置/Docker 列表与日志/Caddy 管理/窄屏摘要/`q` 退出）。
+- **敏感信息扫描**：真实主机名、私网地址、真实接口名、真实容器名、apiKey 片段均未进入仓库；文档/测试示例使用 `host`、`enp1s0`、`192.0.2.1`、假容器名与临时目录。
+
+## 2026-10-20 · M10：btop 式重排、服务栏放大、点外关闭
+
+### 实现
+
+- **布局**：`grid.Node` 增加 Row 宽度权重；宽屏下半区改为左 3／右 2——左栏上排内存/磁盘、下排网络/AI，右栏 Docker/Caddy 纵向服务栏。窄屏仍回退两栏 + 2 行服务摘要；AI 全关时网络吃满左侧下排。
+- **面板**：内存、磁盘、网络、AI 用量改为「标题＋数值 / 整宽实心进度条」两行分类；磁盘空间不足时补「可用」明细；网络保留镜像图 + 下载/上传两行；CPU 右栏高度够时包「核心」子线框，否则竖线分隔；历史不足补 0 基线，内容不足补明细/分隔线，不留空白块。
+- **服务卡**：Docker 直接列运行中容器（名称/CPU/内存），底部汇总 + `D 管理`；Caddy 从配置 host/subjects 提取域名并列出，兼显示上游健康与路由数。
+- **交互**：点击弹窗外侧关闭；点击 AI 用量面板立即重试对应提供商，错误态显示「点击面板重试」；超长域名/容器名/日志行边缘渐隐（`chart.FadeText`）。
+- **文档/测试**：AGENTS A1/A7/A8/A9/A10、布局、统一画法、弹窗规则全部同步；PLAN M10、README、CHANGELOG、FINDINGS；新增 grid 权重、Caddy 域名、服务卡列表、provider 重试、点外关闭等测试。
+
+### 验证
+
+- `gofmt -l cmd internal` 无输出；`go vet ./...` 干净；`go test -count=1 ./...` **14 个测试包全绿**；`CGO_ENABLED=0` 双架构构建通过。
+- 120×30 实拍：CPU 核心子线框 + 补基线；内存/磁盘两行统计；右侧 Docker 6 个运行容器与 Caddy 5 个域名；80×24 实拍两栏 + 服务摘要 + 两行统计。真实 Caddy 只读状态正常；AI 面板（无 key 错误态）显示「点击面板重试」。
+- 重打包安装 `0.4.0~dev` 后对 `/usr/bin/wl` 跑既有 tmux 冒烟 **28 PASS / 0 FAIL**；未对真实容器执行启停、未对系统 Caddy 执行重载（临时实例 reload 已在 M9 验证）。
+
+## 2026-10-20 · M11/M12/M13：方块条、纯鼠标、btop 收尾
+
+### 实现
+
+- **M11**：`chart.MeterH` 改用 `■`；内存/磁盘/网络/AI 全部两行分类；Docker 卡最右侧列 `UP`/`EXIT`/`RESTART`/`PAUSE`/`DEAD` 短状态；Caddy 卡两列展示域名与上游端口；AI 面板按 btop 磁盘区域两行统计。
+- **M12**：删除底部快捷键栏；标题栏最右是 `[ 设置 ]`；键盘只留 `q`，设置/日志输入框内 `q` 是文本；设置弹窗按钮 `[保存]`/`[取消]`/`[关闭]`，Docker 直接按钮 `[启动]`/`[停止]`/`[重启]`/`[日志]`/`[刷新]`/`[关闭]`，日志 `[刷新]`/`[过滤]`/`[返回]`/`[关闭]`，Caddy `[重载配置]`/`[关闭]`；全部点击执行、无二级菜单、无二次确认。
+- **M13**：内存/磁盘/AI 分类之间按高度加分隔线与均匀留白，标签改亮色；网络图与速率之间加分隔线、标题显示上下行；Docker 名称列吃掉剩余宽度、状态右对齐；Docker/Caddy 加载态字段化占位；去掉重复 Swap、残留 `S 设置`/`R 刷新`/`Enter/Esc`/`/ 输入` 文案；设置弹窗状态与按钮移入线框底部，编辑态输入不再挤出右边框。
+
+### 测试与验证
+
+- `gofmt -l cmd internal` 无输出；`go vet ./...` 干净；`go mod tidy` 无 diff；`go test -count=1 ./...` **14 个测试包全绿**（app/settings/monitor/chart/docker/caddy/grid/overlay/usage/cmdusage/sysstat/config/meta/cmd）。
+- `CGO_ENABLED=0` 交叉编译 `linux/arm64`、`linux/amd64` 通过，两个产物均 static。
+- 新增/更新测试：只 `q` 退出、快捷键不弹窗、标题栏按钮命中、设置行/勾选框/保存/取消/关闭、设置弹窗按钮在线框内、Docker 列表与日志按钮、Caddy 重载按钮、Docker 状态右对齐、Swap 不重复、AI 错误态不铺满横线。
+- **安装冒烟**：重打包安装 `with-linux_0.4.0~dev_arm64.deb`，对 `/usr/bin/wl` 在 120×30 与 80×24 用 tmux + SGR 鼠标事件验证：
+  - 120×30：标题栏最右时钟＋`[ 设置 ]`、无底部状态栏；点击右上角打开设置，点行进入编辑，输入 `oc_sk_fake_key_for_tests_0123`，点 `[保存]` 后配置写回、显示「已保存」、点外侧关闭、OpenCode 面板出现；Docker 卡状态右对齐；点击 Docker 卡进入弹窗，点 `[日志]` 进入日志、`[返回]` 回列表、`[关闭]` 关闭；点击 Caddy 卡打开弹窗，`[重载配置]` 可见（未执行）；关闭后 `q` 退出。
+  - 80×24：两行服务摘要、无底部栏、右上角按钮仍可点开设置、`q` 退出。
+  - `s`/`d`/`c`/`Esc`/`R`/方向键在主页面均无反应；设置输入框内 `q` 作为文本。
+- **未执行**：真实容器启动/停止/重启（避免中断用户服务，fake socket 单测覆盖）；系统 Caddy 热重载（只读与临时实例已在 M9 验证）。
+- 安装冒烟中发现并修复：设置弹窗按钮原先落在线框外；编辑态输入把右边框挤出屏幕。修复后重打包、重装并重跑以上冒烟。
+
+## 2026-10-21 · M14：对照 btop 1.2.13 收尾
+
+### 实现
+
+- 用本机 `/usr/bin/btop`（1.2.13）在 120×30 实拍对照；主要差距是 CPU 占比过高、右侧 Docker/Caddy 分界与左侧网络起点错一行、分类标题没有 btop 的分隔线。
+- 高度：CPU/下半区权重改为 1:7，并给 CPU/内存/磁盘/网络/Docker/Caddy 设置 `WantH: 10`；120×30 下 CPU 10 行、左右两栏各 10/10；160×40 下 CPU 13 行、左右两栏各 14/14，分界对齐。
+- 分类标题：`statTitleLine` 改为 `标签 ───── 数值`，对应 btop 的 `├─Used: … ┤`；分类之间在高度富余时再插整行分隔线。
+- 颜色：分类标签、核心编号改主题青色；Docker CPU% 按阈值着色；Caddy 上游健康按 6/6、部分、0/6 分绿/琥珀/红。
+- 新增测试：`TestWidePanelsShareHorizontalBoundaries` 钉住 120 列下左右栏的上/下分界行；`TestPageShowsSampledValues` 增加「已用 ─」分类线断言。
+
+### 验证
+
+- `gofmt -l cmd internal` 无输出；`go vet ./...` 干净；`go test -count=1 ./...` **14 个测试包全绿**。
+- `CGO_ENABLED=0` 双架构交叉编译通过，产物均 static。
+- 重打包安装 `with-linux_0.4.0~dev_arm64.deb`；对 `/usr/bin/wl` 在 120×30 与 160×40 实拍：标题栏设置按钮、无底部栏、`已用 ─` 分类线、Docker `UP` 状态、网络与 Caddy 同行起始、内存/磁盘/Docker 同行起始、160×40 下 Swap 只出现一次、CPU C0–C7 完整，`q` 退出；全部通过。
+- 未执行真实容器启停与系统 Caddy 热重载。
+
+## 2026-10-21 · M15：分色线框与零间隙
+
+### 实现
+
+- 用 `tmux capture-pane -e` 读取 btop 1.2.13 的真实配色：CPU 框 `#556d59`、mem 框 `#6c6c4b`、net 框 `#5c588d`，标题接近白色，而不是统一的暗灰框＋青色标题。
+- 新增 `chart.FrameColored`，保留 `chart.Frame` 默认主题；主页面 `frameTheme` 按标题选 256 色近似：CPU 65、内存 101、磁盘 137、网络 61、Docker 67、Caddy 66、OpenCode 73、Command Code 68，标题 252；「核心」子框跟随 CPU。
+- `grid.ColGap` 改为 0：面板盒子紧挨，线框本身作为分界；grid/monitor 的相关断言改为按 `ColGap` 计算。
+- 分类标签恢复亮灰、核心编号亮灰；数值、状态点、百分比继续按阈值着色。
+
+### 验证
+
+- `gofmt -l cmd internal` 无输出；`go vet ./...` 干净；`go test -count=1 ./...` **14 个测试包全绿**（含新增 `TestFrameColoredUsesPanelTheme`、`TestWidePanelsShareHorizontalBoundaries`）。
+- amd64/arm64 静态交叉编译通过。
+- 120×30 实拍：CPU 绿框、内存橄榄框、磁盘棕框、网络紫框、Docker 蓝框、Caddy 青框，标题近白；盒子零间隙；分类线、状态右对齐、左右分界对齐保持不变。80×24 与 160×40 窄/宽屏检查通过。
+- 未执行真实容器启停与系统 Caddy 热重载。
+
+## 2026-10-21 · M16：网络「速率」子框
+
+### 实现
+
+- 宽网络面板按 btop：`splitColumns(innerW, 30, 24)` 拆左曲线＋右子框；子框标题「速率」，内容用两行分类（↓下载/↑上传）、方块条与累计，框色沿用网络紫。
+- 面板不够宽时保持原来的「上图＋下方两行下载/上传」，不强行塞子框。
+- 新增 `TestWideNetworkUsesRateSubBox`（72 宽出子框，40 宽回退）。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿。
+- 120×30 实拍：网络面板左侧镜像图、右侧速率子框；160×40 子框更高、累计与分隔线正常；80×24 回退上下布局且标题只显示下载（宽度不足）。
+- 重打包安装 `with-linux_0.4.0~dev_arm64.deb`；对 `/usr/bin/wl` 实拍 120×30 与 160×40 有「速率」子框与累计，80×24 回退上下布局；标题按钮、无底部栏、零间隙、分类线、Docker `UP`、五类框色与 `q` 退出均通过。未执行真实容器启停与系统 Caddy 热重载。
+
+## 2026-10-21 · M17：磁盘读写历史曲线
+
+### 实现
+
+- 复用 `history.read` / `history.write`（已有 120 点），磁盘面板 `innerH >= 8` 时在顶部画读 ↑/写 ↓ 镜像曲线：120×30 用 2 行曲线、不加分隔线，保留 3 个挂载点；`innerH >= 12` 用 3 行＋分隔线；`innerH >= 16` 用 4 行。
+- 自动量程下限 `ioMinScale=1 KiB/s`；80×24 的磁盘内高不足 8，仍只显示挂载点。
+- 新增 `TestTallDiskPanelShowsIOHistory`：46×14 与 36×10 两个面板都要出现 braille 曲线，行数分别保持 14/10。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿。
+- 120×30 实拍：磁盘顶部出现 2 行读写曲线，同时保留 `/`、`/boot`、`/var/log` 三个挂载点；160×40 曲线加高并带分隔线、挂载点与可用明细正常。
+- 重打包安装 `with-linux_0.4.0~dev_arm64.deb`；对 `/usr/bin/wl` 实拍 120×30 与 160×40，磁盘读写曲线、挂载点、零间隙、分色框、网络子框与 `q` 退出均通过。未执行真实容器启停与系统 Caddy 热重载。
+
+## 2026-10-21 · M18：只读统计补充与 Caddy 刷新
+
+### 实现
+
+- **CPU 频率**：读 `/sys/devices/system/cpu/cpuN/cpufreq/{scaling_cur_freq,cpuinfo_cur_freq}`，各核取平均；标题显示 `CPU <型号> <频率>`，频率读不到时省略。`readCPUFreq` 有 fixture 单测。
+- **网络 IP/错误/丢包**：`Net` 增加 `IP`、`RxErrors/TxErrors/RxDropped/TxDropped`；`/proc/net/dev` 解析错误/丢包四列；生产 Root 下用 `net.InterfaceByName` 取首个 IPv4，fixture 测试跳过真实网卡。错误/丢包非零时在速率子框显示一行，正常隐藏。
+- **磁盘 IO**：把已有的 `Disk.Util` 接到磁盘标题 `IO n%`。
+- **Caddy 刷新**：运行态弹窗增加 `[刷新]`，复用 `RefreshCaddyNow`，只读重取管理 API 和 systemd 摘要。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿（新增 CPU 频率、网络错误/丢包、Caddy 刷新按钮测试）。
+- amd64/arm64 静态交叉编译通过。
+- 重打包安装；对 `/usr/bin/wl` 在 160×40 实拍：CPU 标题含平均频率、网络标题含主网卡 IPv4、磁盘标题含 IO 占用率；点 Caddy 卡打开弹窗可见 `[刷新] [重载配置] [关闭]`，`q` 退出正常。
+- 未执行真实容器启停与系统 Caddy 热重载。
+
+## 2026-10-21 · M19：同类工具布局调研与面板放大
+
+### 调研
+
+- 搜索并对照 btop、bottom（btm）、glances、gtop、atop 的布局：btop 是固定网格，bottom 是 widget 化布局并带 **expand 模式**，glances 自适应尺寸并带进程列表；结论写入 `FINDINGS.md §9`。
+- 决策：保留现有 btop 式单页网格，采纳 bottom 的 expand 模式；不加入进程列表、可编辑布局文件或标签页（超出非目标）。
+
+### 实现
+
+- `monitor.PanelLines(id,w,h)` 暴露单面板渲染；`app.focusPanel` 保存放大目标。
+- 点击 CPU/内存/磁盘/网络面板铺满整个内容区；点击内容区或标题栏按钮返回网格；放大态标题栏按钮变为 `[ 返回布局 ]`（窄屏 `[返回]`/`[返]`）。Docker/Caddy 仍开弹窗，AI 仍重试。
+- 新增 `TestPanelExpandsAndReturns`，覆盖 CPU 放大、内容行数、返回按钮、内存放大和点内容返回。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿。
+- amd64/arm64 静态交叉编译通过。
+- 重打包安装后对 `/usr/bin/wl` 在 160×40 与 120×30 实拍：CPU 面板放大后铺满内容区、标题栏显示返回按钮，点击内容或返回按钮恢复网格，`q` 退出正常。未执行真实容器启停与系统 Caddy 热重载。
+
+## 2026-10-21 · M20：补元素不改网格
+
+### 实现
+
+- **CPU 分解**：`/proc/stat` 增量计算 user/system/iowait 百分比；CPU 核框 detail 高 ≥7 时在用量条下加 `用户/系统/IO` 一行。120×30 也能放下，C0–C7 不丢。
+- **Docker 列头**：卡片内高 ≥10 时先画 `容器 / CPU / 内存 / 状态` 列头；120×30 内高 8 不加。
+- **磁盘 inode**：`statfs` 取 Files/Ffree，挂载点「可用」行追加 `· inode n%`；无 inode 数据的文件系统自动省略。
+- 不改任何面板位置；新增 CPU 分解、inode、Docker 列头测试。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿。
+- amd64/arm64 静态交叉编译通过。
+- 重打包安装；160×40 实拍 CPU 分解、Docker 列头、磁盘 inode 均出现；120×30 实拍 CPU 分解出现、Docker 列头按高度省略；`q` 退出正常。未执行真实容器启停与系统 Caddy 热重载。
+
+## 2026-10-21 · M21：宽屏试用布局与去按键提示
+
+### 实现
+
+- 宽屏布局改为：左栏内存/磁盘 + 网络整行；右栏 Docker/Caddy + 可见 AI 用量纵向排列。AI 全关时 Docker/Caddy 均分右栏；只开一个时另一个占满底部；窄屏保持原两栏。
+- 网络因此稳定拿到整行宽度，速率子框保留；AI 面板在右栏底部并排。
+- 界面文案检查：不显示 `Q 退出`/`R 刷新`/`S 设置`/`Enter`/`Esc`/`PgUp`/`PgDn` 等按键提示，只剩鼠标按钮/点击提示；`q` 仍只作为退出键。
+- 文档同步 A7/A9、布局图、README、CHANGELOG、PLAN。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿。
+- amd64/arm64 静态交叉编译通过。
+- 重打包安装；120×30/160×40 实拍 AI 在右侧、网络整行带速率子框、无按键提示，`q` 退出正常。未执行真实容器启停与系统 Caddy 热重载。
+
+## 2026-10-21 · M22：面板内部细节与标题行放大
+
+### 实现
+
+- **CPU 高度**：宽屏使用 `panelCPUWide`（MinH 10），120×30 也画出「核心」子线框并显示 `用户/系统/IO`；核区内部有完整边框和呼吸空间。
+- **核区分隔**：`zipColumnsBar` 分隔条左右各留 1 格（左侧曲线让出 1 格），不改变总宽。
+- **放大命中**：新增 `HitPanelTitle`，只有面板标题线框行触发放大；点图表/空白区不再误触。
+- **历史稳定**：CPU 主图与每核小图固定蓝/青色，历史柱体不会因当前值跨阈值整体变色；百分比文字仍按阈值着色。
+- **去键位提示**：Docker/Caddy 卡片和摘要条的 `D 管理`/`C 管理` 全部改成「点击管理」。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿。
+- amd64/arm64 静态交叉编译通过。
+- 重打包安装；120×30 实拍 CPU 子线框/分解、点击内容不放大、点击标题放大、「点击管理」无 D/C 提示，`q` 退出正常。未执行真实容器启停与系统 Caddy 热重载。
+## 2026-10-21 · M23：CPU 标题频率与多核时间轴
+
+### 实现
+
+- CPU 标题左侧只写 `CPU <型号>`；右上角值改为平均频率 `freqText`，占用率只在核心框的用量条上。
+- 每核小图改为 `slots=max(graphW*2,4)` + `tailHist`：一个 braille 点列对应 1 秒（半格），窗口约 20 秒；刷新时柱体逐秒左移一个点列，不再把 120 个样本压进十几格。
+- 历史柱体固定蓝色，百分比文字仍按当前值着色。
+- 实测连续多秒 C0 图形逐点列左移；最终采用一个点列/秒，避免一次跳两格。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿。
+- amd64/arm64 静态交叉编译通过。
+- 120×30 实拍 CPU 左侧 `CPU RK3588`、右上角频率，核心框与 `用户/系统/IO` 正常；`q` 退出正常。
+## 2026-10-21 · M24：AI 固定行数 ＋ Docker/Caddy 卡细节
+
+### 实现
+
+- AI 用量面板设置 `WantH:5`，删除两行统计分支，始终是 3 行窗口内容＋线框；页面变高时富余高度分给 Docker/Caddy。
+- Docker/Caddy 卡片和窄屏摘要全部去掉「点击管理」；点击卡片仍打开弹窗。
+- Docker 的 `CPU % · 内存` 汇总从底部移到内容区第一行；列头和容器列表从第二行开始。
+- Caddy 去掉底部提示后，把空间让给域名/上游、API 与配置文件行。
+
+### 验证
+
+- `gofmt`/`go vet` 干净；`go test -count=1 ./...` 14 个测试包全绿（新增 AI 面板固定 5 行、Docker 汇总首行、无管理提示测试）。
+- amd64/arm64 静态交叉编译通过。
+- 重打包安装；160×40 实拍 AI 面板 5 行、Docker 汇总在首行、Docker/Caddy 无管理提示，`q` 退出正常。
+
+## 2026-10-21 · M25：去掉服务卡底部填充线
+
+### 实现
+
+- `finishPanel` 删除「内容不足补分隔线」逻辑，改为补空行；Docker/Caddy 内容不足时不再出现一条占行的 `─`。
+
+### 验证
+
+- `go test -count=1 ./...` 14 个测试包全绿；amd64/arm64 静态交叉编译通过。
+- 重装后 160×40 实拍 Docker 底部只剩空白行、无填充线，`q` 退出正常。

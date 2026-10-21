@@ -2,21 +2,36 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.5.0] - 2026-10-21
 
 ### Added
 
-- 用量页展示开关（`A7`，属范围扩张，2026-10-06 用户确认）：设置页每个 key 行首增加勾选框，控制对应用量页是否出现在顶栏；非编辑态按 `空格` 切换、鼠标点勾选框切换；关闭的页从顶栏移除、不可切换到，当前页被关闭时退回「设置」
-- 新增配置字段 `showOpenCode` / `showCommandCode`（显式 true/false）；**默认两页都关闭**，但某页开关从未显式设置时，配置里有对应 key 就自动展示一次——用户显式关闭后不再自动打开
+- **btop 式系统状态页**（A8/A9）：CPU（总占用 / 最忙核镜像图、两列多核、用户/系统/IO、温度/负载、型号与平均频率）、内存、磁盘（挂载点、inode、读写历史曲线）、网络（宽面板左图＋独立速率子框、IP、错误/丢包）与 Docker/Caddy 状态卡；主图保留 2 分钟历史。
+- **Docker 服务**（A10，属范围扩张）：通过 Unix socket 读取容器列表/统计，卡片列出容器与 `UP`/`EXIT` 状态，弹窗支持启动、停止、重启、刷新及最近 200 行日志（滚动、过滤）；只调用受控端点，不做 exec/删除/镜像/Compose 管理。
+- **Caddy 服务**（A10，属范围扩张）：只读管理 API/systemd 状态、路由数、上游健康、域名与目的端口；弹窗支持刷新和热重载 Caddyfile，不做启停或配置编辑。
+- **AI 用量面板**：OpenCode Go 与 Command Code 的 5 小时 / 每周 / 月度额度，使用方块计量条；设置弹窗中的勾选框控制展示，出错时可点击面板重试。
+- **设置 / Docker / Caddy 弹窗**：Canvas 整屏灰化、弹窗居中覆盖，点击外侧关闭；设置支持保存/取消/关闭、Key 掩码与「关于」信息。
+- **只读细节**：CPU 平均频率与 usr/sys/io 分解、网卡 IPv4 与错误/丢包、磁盘 `%util` 与 inode、Docker 列头；面板标题行可放大到整屏（bottom expand 式）。
 
 ### Changed
 
-- 设置页第一行 key 标签 `API Key` → `OpenCode Key`（与 `Command Code Key` 对称）
-- 顶栏 `←`/`→`、`1`–`9` 与短名去重只在**可见**标签间进行
+- **单页 btop 布局**：宽屏 CPU 一整行，下半区左侧内存/磁盘与整行网络，右侧 Docker/Caddy/可见 AI 用量；窄屏回退两栏＋服务摘要。面板线框按 btop 分色、盒子零间隙，分类标题用细线连接标签和数值。
+- **纯鼠标交互**：键盘只保留 `q` 退出；设置按钮在标题栏右上角，所有操作改为点击按钮/行，滚动用鼠标滚轮；弹窗内的 `Esc`、`D`/`C` 等快捷键提示全部移除。
+- **AI 面板固定 5 行**（3 行窗口内容＋线框），页面变高时富余高度给 Docker/Caddy；Docker 的 CPU/内存总量放在内容区首行。
+- CPU 多核小图改为**一个 braille 点列 1 秒**，只取最近约 20 秒；历史柱体固定蓝色，百分比文字按阈值着色。主图仍保留 2 分钟。
+- 弹窗、Docker/Caddy 状态卡与设置文案全部改为鼠标按钮语义；Docker/Caddy 卡片去掉底部管理提示和填充分隔线。
+
+### Removed
+
+- 顶部工具 tab 栏、底部状态栏/快捷键栏，以及 `s`/`d`/`c`/`Esc`/`R`/方向键/`PgUp`/`PgDn` 等快捷键（`q` 仍退出）。
+- 旧的 `internal/gauge` 三列点阵画法；旧设置独立视图与 `[ 返回 ]` 按钮。
+- Docker 操作二级菜单/二次确认（改为弹窗内直接按钮）。
 
 ### Fixed
 
-- 用量页点阵在 100% 时整列填满：满格（百分比 ≥ 100）取消顶部 ramp 渐变，不再残留稀疏暗点（矮终端上尤其明显，此前 100% 看起来只有六七成满）
+- 设置弹窗按钮、长状态文案不再挤出线框；Docker/Caddy 内容不足时不再补分隔线占行。
+- 去掉重复的 Swap 展示、过时的快捷键提示，以及 Docker/Caddy 卡片的 `D/C 管理` 文字。
+- 修正 CPU 标题频率位置、多核历史小图不左移/颜色随当前值变化的问题。
 
 ## [0.3.0] - 2026-10-05
 
@@ -106,6 +121,7 @@
 - 配置：`$XDG_CONFIG_HOME/with-linux/config.json`（默认 `~/.config/with-linux/config.json`），`apiKey` 字段
 - 交付：单一可执行文件，全静态交叉编译 `linux/amd64` ＋ `linux/arm64`
 
+[0.5.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.0
 [0.3.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.3.0
 [0.2.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.2.0

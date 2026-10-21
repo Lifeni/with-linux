@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/Lifeni/with-linux/internal/chart"
 	"github.com/Lifeni/with-linux/internal/config"
 	"github.com/Lifeni/with-linux/internal/meta"
 )
@@ -149,14 +150,6 @@ func (m Model) Reload() Model {
 	return m.reloadConfig()
 }
 
-// Hints 是状态栏左侧的快捷键提示。
-func (m Model) Hints() string {
-	if m.editing {
-		return "Q 退出 · Enter 保存 · Esc 取消"
-	}
-	return "Q 退出 · ↑↓ 选择 · Enter 编辑 · 空格 开关"
-}
-
 // StatusText 是状态栏右侧的保存状态。severity：2=错误，1=注意，0=正常。
 func (m Model) StatusText() (text string, severity int) {
 	switch {
@@ -166,7 +159,7 @@ func (m Model) StatusText() (text string, severity int) {
 		return m.loadErr, 2
 	case m.editing:
 		if m.input.Value() != m.keyFor(m.selected) {
-			return "未保存（Enter 保存 · Esc 取消）", 1
+			return "未保存（点 [保存] 或 [取消]）", 1
 		}
 		return "编辑中", 0
 	case m.saved:
@@ -196,14 +189,6 @@ func (m Model) ShortStatusText() string {
 // Update 处理设置页的按键。编辑态由 Editing + 框架转发保证：全局键已让位。
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if m.editing {
-		if key, ok := msg.(tea.KeyPressMsg); ok {
-			switch key.String() {
-			case "enter":
-				return m.save()
-			case "esc":
-				return m.cancel()
-			}
-		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -296,6 +281,22 @@ func (m Model) beginEdit() (Model, tea.Cmd) {
 	m.input.SetValue(m.keyFor(m.selected))
 	m.input.CursorEnd()
 	return m, m.input.Focus()
+}
+
+// SaveEdit / CancelEdit 供鼠标按钮调用；编辑态下不再响应 Esc/Enter 快捷键。
+func (m Model) SaveEdit() (Model, tea.Cmd) {
+	if !m.editing {
+		return m, nil
+	}
+	return m.save()
+}
+
+func (m Model) CancelEdit() Model {
+	if !m.editing {
+		return m
+	}
+	next, _ := m.cancel()
+	return next
 }
 
 func (m Model) cancel() (Model, tea.Cmd) {
@@ -468,6 +469,31 @@ func (m Model) Lines(width int) []string {
 	}
 	box = lipgloss.PlaceHorizontal(width, lipgloss.Center, box)
 	return strings.Split(box, "\n")
+}
+
+// ModalLines 返回不做水平居中的自然线框，交给 overlay 居中覆盖。
+// maxWidth 是弹窗可用的最大宽度；超出时逐行截断，避免折行。footer 放在线框内部底部。
+func (m Model) ModalLines(maxWidth int, footer ...string) []string {
+	if maxWidth <= 0 {
+		return nil
+	}
+	contentW := max(maxWidth-boxChromeW, 1)
+	inner := m.innerLines(maxWidth)
+	for i := range inner {
+		inner[i] = chart.ClampTo(inner[i], contentW)
+	}
+	if len(footer) > 0 {
+		inner = append(inner, "")
+		for _, line := range footer {
+			inner = append(inner, chart.ClampTo(line, contentW))
+		}
+	}
+	box := stBox.Render(strings.Join(inner, "\n"))
+	lines := strings.Split(box, "\n")
+	for i := range lines {
+		lines[i] = chart.ClampTo(lines[i], maxWidth)
+	}
+	return lines
 }
 
 // apiKeyLine / commandCodeKeyLine 是内容区（自然高度、行号自 0 起）里可编辑行的行号：

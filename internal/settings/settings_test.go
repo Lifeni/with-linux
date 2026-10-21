@@ -39,9 +39,6 @@ func keyPress(code rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Code: code, Text: string(code)})
 }
 
-func enter() tea.KeyPressMsg { return tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}) }
-func esc() tea.KeyPressMsg   { return tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}) }
-
 // update 跑一次 Update，丢弃 Cmd。
 func update(m Model, msg tea.Msg) Model {
 	nm, _ := m.Update(msg)
@@ -166,12 +163,12 @@ func TestKeyIsMasked(t *testing.T) {
 	}
 }
 
-func TestEnterEditsThenEscCancels(t *testing.T) {
+func TestBeginEditThenCancel(t *testing.T) {
 	m := newTestModel(t, testKey)
 
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 	if !m.Editing() {
-		t.Fatal("Enter 未进入编辑态")
+		t.Fatal("beginEdit 未进入编辑态")
 	}
 	if v := m.input.Value(); v != testKey {
 		t.Fatalf("编辑框初值 = %q, want 当前 key", v)
@@ -182,26 +179,26 @@ func TestEnterEditsThenEscCancels(t *testing.T) {
 		t.Fatal("编辑态输入未显示")
 	}
 
-	m = update(m, esc())
+	m = m.CancelEdit()
 	if m.Editing() {
-		t.Fatal("Esc 未退出编辑态")
+		t.Fatal("CancelEdit 未退出编辑态")
 	}
 	if got := loadKey(t); got != testKey {
-		t.Fatalf("Esc 后配置被改动: %q", got)
+		t.Fatalf("取消后配置被改动: %q", got)
 	}
 	if text, _ := m.StatusText(); text != "" {
 		t.Fatalf("取消后状态栏 = %q, want 空", text)
 	}
 }
 
-func TestEnterSavesAndReportsSaved(t *testing.T) {
+func TestSaveEditReportsSaved(t *testing.T) {
 	m := newTestModel(t, "")
 
 	if !strings.Contains(m.Lines(80)[apiKeyLine], "(未设置)") {
 		t.Fatalf("空 key 未提示: %q", m.Lines(80)[apiKeyLine])
 	}
 
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 	for _, ch := range []rune(testKey) {
 		m = update(m, keyPress(ch))
 	}
@@ -209,7 +206,7 @@ func TestEnterSavesAndReportsSaved(t *testing.T) {
 		t.Fatalf("改动后状态栏 = (%q,%d), want 未保存/1", text, sev)
 	}
 
-	nm, cmd := m.Update(enter())
+	nm, cmd := m.SaveEdit()
 	m = nm
 	if m.Editing() {
 		t.Fatal("保存后仍在编辑态")
@@ -234,10 +231,10 @@ func TestEnterSavesAndReportsSaved(t *testing.T) {
 func TestSaveEmptyClearsKey(t *testing.T) {
 	m := newTestModel(t, testKey)
 
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 	m.input.SetValue("")
 
-	nm, cmd := m.Update(enter())
+	nm, cmd := m.SaveEdit()
 	m = nm
 	if cmd == nil {
 		t.Fatal("清空后未产出 Cmd")
@@ -259,10 +256,10 @@ func TestSaveFailureShowsError(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", base)
 
 	m := New(meta.Info{})
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 	m = update(m, keyPress('k'))
 
-	nm, cmd := m.Update(enter())
+	nm, cmd := m.SaveEdit()
 	m = nm
 	if cmd != nil {
 		t.Fatal("保存失败不该产出 Cmd")
@@ -291,9 +288,9 @@ func TestLoadBrokenConfigShowsErrorAndRepairsWithBackup(t *testing.T) {
 		t.Fatalf("损坏配置状态 = (%q,%d), want 配置损坏/2", text, sev)
 	}
 
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 	m.input.SetValue(testKey)
-	nm, cmd := m.Update(enter())
+	nm, cmd := m.SaveEdit()
 	m = nm
 	if cmd == nil {
 		t.Fatal("修复损坏配置后未产出 Cmd")
@@ -341,7 +338,7 @@ func TestClickRowEntersEditOutsideCheckbox(t *testing.T) {
 func TestReloadPicksUpExternalChangeAndCancelsEdit(t *testing.T) {
 	m := newTestModel(t, "old-key")
 
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 
 	if err := config.Save("external-key"); err != nil {
 		t.Fatal(err)
@@ -352,17 +349,6 @@ func TestReloadPicksUpExternalChangeAndCancelsEdit(t *testing.T) {
 	}
 	if v := m.input.Value(); v != "external-key" {
 		t.Fatalf("Reload 后输入框 = %q, want external-key", v)
-	}
-}
-
-func TestHintsFollowEditState(t *testing.T) {
-	m := newTestModel(t, testKey)
-	if got := m.Hints(); !strings.Contains(got, "Enter 编辑") {
-		t.Fatalf("非编辑态提示 = %q", got)
-	}
-	m = update(m, enter())
-	if got := m.Hints(); !strings.Contains(got, "Enter 保存") {
-		t.Fatalf("编辑态提示 = %q", got)
 	}
 }
 
@@ -388,7 +374,7 @@ func TestShortStatusText(t *testing.T) {
 	if got := m.ShortStatusText(); got != "" {
 		t.Fatalf("空闲短状态 = %q, want 空", got)
 	}
-	nm, _ := m.Update(enter())
+	nm, _ := m.beginEdit()
 	m = nm
 	if got := m.ShortStatusText(); got != "编辑中" {
 		t.Fatalf("编辑态短状态 = %q", got)
@@ -397,7 +383,7 @@ func TestShortStatusText(t *testing.T) {
 	if got := m.ShortStatusText(); got != "未保存" {
 		t.Fatalf("改动后短状态 = %q", got)
 	}
-	nm, _ = m.Update(enter())
+	nm, _ = m.SaveEdit()
 	m = nm
 	if got := m.ShortStatusText(); got != "已保存" {
 		t.Fatalf("保存后短状态 = %q", got)
@@ -417,17 +403,17 @@ func loadKeyCC(t *testing.T) string {
 func TestCommandCodeRowSavesItsOwnField(t *testing.T) {
 	m := newTestModel(t, testKey) // apiKey 已有值
 
-	m = update(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m.selected = rowCommandCode
 	if m.selected != rowCommandCode {
 		t.Fatalf("↓ 后 selected = %d, want %d", m.selected, rowCommandCode)
 	}
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 
 	ccKey := "user_cc_fake_key_0123"
 	for _, ch := range []rune(ccKey) {
 		m = update(m, keyPress(ch))
 	}
-	nm, cmd := m.Update(enter())
+	nm, cmd := m.SaveEdit()
 	m = nm
 	if cmd == nil {
 		t.Fatal("保存后未产出 Cmd")
@@ -479,9 +465,9 @@ func TestVisibilityFollowsKeyUntilExplicitlySet(t *testing.T) {
 	}
 
 	// 填 key（开关仍为未设置）→ 自动展示
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 	m.input.SetValue(testKey)
-	nm, _ := m.Update(enter())
+	nm, _ := m.SaveEdit()
 	m = nm
 	if oc, _ := m.Visibility(); !oc {
 		t.Fatal("填了 key 后应自动展示")
@@ -495,24 +481,24 @@ func TestVisibilityFollowsKeyUntilExplicitlySet(t *testing.T) {
 	}
 }
 
-// 空格切换开关：写回显式 bool，产出可见性消息，勾选框随状态变化。
-func TestSpaceTogglesAndPersists(t *testing.T) {
+// 切换开关：写回显式 bool，产出可见性消息，勾选框随状态变化。
+func TestTogglePersists(t *testing.T) {
 	m := newTestModel(t, testKey) // 有 key → 默认展示
 	if oc, _ := m.Visibility(); !oc {
 		t.Fatal("有 key 时 OpenCode 页应默认展示")
 	}
 
-	nm, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
+	nm, cmd := m.toggle()
 	m = nm
 	if cmd == nil {
-		t.Fatal("空格未产出 Cmd")
+		t.Fatal("切换未产出 Cmd")
 	}
 	msg, ok := cmd().(TogglesChangedMsg)
 	if !ok || msg.OpenCode {
-		t.Fatalf("空格 Cmd = %T/%+v, want TogglesChangedMsg{OpenCode:false}", cmd(), msg)
+		t.Fatalf("切换 Cmd = %T/%+v, want TogglesChangedMsg{OpenCode:false}", cmd(), msg)
 	}
 	if oc, _ := m.Visibility(); oc {
-		t.Fatal("空格后 OpenCode 页仍展示")
+		t.Fatal("切换后 OpenCode 页仍展示")
 	}
 	if line := rowLine(m, apiKeyLine); !strings.Contains(line, checkOff) {
 		t.Fatalf("切换后勾选框应为关: %q", line)
@@ -529,14 +515,14 @@ func TestSpaceTogglesAndPersists(t *testing.T) {
 // 显式关闭后，即便再保存 key 也不再自动打开。
 func TestManualCloseNotAutoReopenedByKeySave(t *testing.T) {
 	m := newTestModel(t, testKey)
-	m = update(m, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace})) // 关闭
+	m, _ = m.toggle() // 关闭
 	if oc, _ := m.Visibility(); oc {
 		t.Fatal("关闭失败")
 	}
 
-	m = update(m, enter())
+	m, _ = m.beginEdit()
 	m.input.SetValue(testKey + "_v2")
-	nm, cmd := m.Update(enter())
+	nm, cmd := m.SaveEdit()
 	m = nm
 	if cmd == nil {
 		t.Fatal("保存未产出 Cmd")
@@ -549,7 +535,7 @@ func TestManualCloseNotAutoReopenedByKeySave(t *testing.T) {
 // 无 key 时也能手动打开（页面会提示未配置），且是显式 true。
 func TestToggleOnWithoutKey(t *testing.T) {
 	m := newTestModel(t, "")
-	nm, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
+	nm, cmd := m.toggle()
 	m = nm
 	msg, ok := cmd().(TogglesChangedMsg)
 	if !ok || !msg.OpenCode {
