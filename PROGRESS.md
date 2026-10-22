@@ -1036,3 +1036,20 @@ ok  	with-linux/internal/app	0.093s
 - app 测试覆盖 `[配置文件]` 入口、内容/行号显示、滚轮、`[返回]` 回状态视图。
 - `go test -count=1 ./...`：14 个测试包全绿；`gofmt`/`go mod tidy -diff`/`go vet` 干净；amd64/arm64 静态构建通过。
 - 打包安装后复核版本、包校验与启动/退出；真实 Caddyfile 内容不在日志中展开。
+
+## 2026-10-22 · M31：服务卡双端渐隐并定版 v0.5.1
+
+### 实现
+
+- `chart.FadeRows` 改为按离最近上下视口边界的行数取非线性灰阶：边界 237，向内依次 246/252/254/255；单行退回可读的中间灰阶。
+- Docker/Caddy 可滚正文不再依赖“下方还有隐藏行”才渐隐，始终做上下双端过渡；固定汇总行、Docker 列头和 Caddy 表头保持原色。
+- 发布口径从尚未打 tag 的 `0.6.0` 修正为 `0.5.1`，同步章程、README、PLAN、FINDINGS 与 CHANGELOG。
+
+### 验证
+
+- `internal/chart`：双端对称、矮列表非线性档位、单行回退、ANSI 清理均通过。
+- `internal/monitor`：Docker/Caddy 在列表未溢出、顶部没有隐藏内容时，仍分别验证了上下边界与中间行的灰阶。
+- `go test -count=1 ./...`：沙箱外全量 13 个测试包通过（本地测试需要监听 TCP/Unix socket）。
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接。
+- 本机为 RK3588 39 位用户地址空间；`go test -race` 被 ThreadSanitizer 以 `unsupported VMA range` 拒绝，属工具链环境限制。race 仍由 GitHub Actions 的 amd64 runner 覆盖。
