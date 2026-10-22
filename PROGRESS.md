@@ -1089,3 +1089,4 @@ ok  	with-linux/internal/app	0.093s
 - `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 干净。
 - `CGO_ENABLED=0` 的 linux/amd64 与 linux/arm64 静态构建通过。
 - 120×30 临时构建实拍：CPU 温度/负载、内存容量/百分比、磁盘可用/inode、Docker 总量均已对齐；内存较长 Swap 值自动降为整行，不再截断百分比；`q` 正常退出。
+- 构建并安装 `with-linux 0.5.2~dev` ARM64 包供用户实测：`/usr/bin/wl --version` → `wl 0.5.2~dev`，安装二进制与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `b4b31b9e…`，`dpkg -V with-linux` 无差异。
