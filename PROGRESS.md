@@ -1140,3 +1140,4 @@ ok  	with-linux/internal/app	0.093s
 - 120×30 实拍：CPU 核心最右百分比贴住子框右下边界；Caddy `域名/路由/上游/请求` 四项同一行；设置弹窗 72 格且按钮上方有分隔线；`s` 打开设置、Esc 关闭且应用继续运行、q 退出。
 - 全量测试、gofmt、go mod tidy -diff、vet、双架构静态构建通过。
 - 重新构建并安装 `with-linux 0.5.2~dev`：`/usr/bin/wl --version` → `wl 0.5.2~dev`，安装二进制与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `d45b42a5…`，`dpkg -V` 无差异。
+- 收窄设置弹窗、按钮分隔线和 Caddy 四项单行后再次安装：安装二进制与包内 SHA-256 同为 `3bffd47c…`，`dpkg -V` 无差异。
