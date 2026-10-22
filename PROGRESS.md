@@ -1141,3 +1141,10 @@ ok  	with-linux/internal/app	0.093s
 - 全量测试、gofmt、go mod tidy -diff、vet、双架构静态构建通过。
 - 重新构建并安装 `with-linux 0.5.2~dev`：`/usr/bin/wl --version` → `wl 0.5.2~dev`，安装二进制与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `d45b42a5…`，`dpkg -V` 无差异。
 - 收窄设置弹窗、按钮分隔线和 Caddy 四项单行后再次安装：安装二进制与包内 SHA-256 同为 `3bffd47c…`，`dpkg -V` 无差异。
+
+## 2026-10-22 · v0.5.2 发布
+
+- CHANGELOG 将 M31–M36 的未发布变化定版为 `0.5.2`；PLAN 状态更新为 `v0.5.2`。
+- 推送 `main` 与标签 `v0.5.2`；GitHub Actions Release 工作流 run `39739757799` 成功，用时 51 秒。
+- Release：[with-linux v0.5.2](https://github.com/Lifeni/with-linux/releases/tag/v0.5.2)，包含 amd64/arm64 的 tar.gz/deb/rpm 与 `checksums.txt`。
+- 本地正式包 `dist/with-linux_0.5.2_arm64.deb` 覆盖安装成功：`wl 0.5.2`，安装二进制与包内 SHA-256 同为 `b6e590f0…`，`dpkg -V` 无差异。
