@@ -1138,3 +1138,4 @@ ok  	with-linux/internal/app	0.093s
 - monitor 测试：Caddy 摘要对齐、CPU 多核总宽、温度/负载与左右列百分比边界。
 - 120×30 实拍：CPU 核心最右百分比贴住子框右下边界；Caddy 摘要 `域名/路由`、`上游/请求` 两端对齐；`s` 打开设置、Esc 关闭且应用继续运行、q 退出。
 - 全量测试、gofmt、go mod tidy -diff、vet、双架构静态构建通过。
+- 重新构建并安装 `with-linux 0.5.2~dev`：`/usr/bin/wl --version` → `wl 0.5.2~dev`，安装二进制与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `d45b42a5…`，`dpkg -V` 无差异。
