@@ -1053,3 +1053,6 @@ ok  	with-linux/internal/app	0.093s
 - `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
 - `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接。
 - 本机为 RK3588 39 位用户地址空间；`go test -race` 被 ThreadSanitizer 以 `unsupported VMA range` 拒绝，属工具链环境限制。race 仍由 GitHub Actions 的 amd64 runner 覆盖。
+- 生成 `dist/with-linux_0.5.1_arm64.deb`（SHA-256 `cfb4b45c…`），包内 `wl --version` → `wl 0.5.1`；包内二进制 SHA-256 `2c684125…`。
+- 用该包替换安装：`with-linux 0.5.1 arm64 install ok installed`；`/usr/bin/wl --version` → `wl 0.5.1`，与 `dist/pkg/wl-linux-arm64` 哈希一致，`dpkg -V with-linux` 无差异。
+- 120×30 临时空配置启动已安装版本：标题栏、CPU/内存/磁盘/网络与服务卡正常；发送 `q` 后 tmux 会话退出。
