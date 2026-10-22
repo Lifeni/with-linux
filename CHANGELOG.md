@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.5.2] - 2026-10-22
 
 ### Added
 
@@ -23,7 +23,6 @@
 - Docker/Caddy 短列表不再被整体改成灰色：可见行少于 4 行或对应方向没有隐藏内容时保持原始颜色。
 - 服务卡需要渐隐时只压暗原 SGR 前景色并保留绿/红/琥珀等色相，不再删除 ANSI 样式后套统一灰阶。
 - 系统面板的明细标签与数值统一两端对齐：CPU 温度/负载及用户/系统/IO、内存、磁盘、网络、Docker/Caddy 摘要按等宽列右对齐，宽度不足时自动降列。
-- 设置、Docker、Caddy 弹窗的操作按钮行改为首按钮贴左、末按钮贴右，其余按钮等距分布。
 - AI 用量每行的重置倒计时改为右对齐；窄时会优先压缩计量条而不是直接丢掉时间列。
 - 宽屏内存明细不足两列宽度时，从右侧 AI/Docker/Caddy 服务栏借少量宽度；内存与磁盘保持等宽。
 - Swap 明细去掉百分比，只显示已用/总量，为内存两列留出稳定空间。
@@ -172,6 +171,7 @@
 - 配置：`$XDG_CONFIG_HOME/with-linux/config.json`（默认 `~/.config/with-linux/config.json`），`apiKey` 字段
 - 交付：单一可执行文件，全静态交叉编译 `linux/amd64` ＋ `linux/arm64`
 
+[0.5.2]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.2
 [0.5.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.1
 [0.5.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.0
 [0.3.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.3.0
