@@ -1,13 +1,15 @@
 // Package caddy 通过 Caddy admin API 读取状态，并在用户显式操作时热重载 Caddyfile。
-// 不做启停/重启、不编辑配置、不展示配置内容。
+// Caddyfile 只能只读查看，不做启停/重启或编辑。
 package caddy
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -18,6 +20,7 @@ const (
 	DefaultConfigPath = "/etc/caddy/Caddyfile"
 	DefaultCommand    = "caddy"
 	requestTimeout    = 3 * time.Second
+	maxConfigBytes    = 2 << 20
 )
 
 // Upstream 是反向代理上游的健康摘要。
@@ -47,6 +50,15 @@ type SystemdStatus struct {
 	Active   string
 	Sub      string
 	Restarts string
+}
+
+// ConfigFile 是 Caddyfile 的只读内容；超限时 Truncated=true。
+type ConfigFile struct {
+	Path      string
+	Lines     []string
+	Truncated bool
+	Err       error
+	Updated   time.Time
 }
 
 // Client 是 Caddy 管理 API / CLI 客户端。
@@ -109,6 +121,42 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// ConfigPath 返回当前客户端使用的 Caddyfile 路径。
+func (c *Client) ConfigPath() string { return c.configPath }
+
+// LoadConfigFile 只读加载 Caddyfile。内容只在调用方内存中存在，最多读取 2 MiB。
+func (c *Client) LoadConfigFile(ctx context.Context) ConfigFile {
+	out := ConfigFile{Path: c.configPath, Updated: time.Now()}
+	if err := ctx.Err(); err != nil {
+		out.Err = err
+		return out
+	}
+	f, err := os.Open(c.configPath)
+	if err != nil {
+		out.Err = fmt.Errorf("读取 Caddyfile 失败：%w", err)
+		return out
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		out.Err = fmt.Errorf("读取 Caddyfile 失败：%w", err)
+		return out
+	}
+	if len(data) > maxConfigBytes {
+		data = data[:maxConfigBytes]
+		out.Truncated = true
+	}
+	text := strings.ToValidUTF8(string(data), "�")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\x00", "")
+	text = strings.TrimSuffix(text, "\n")
+	if text != "" {
+		out.Lines = strings.Split(text, "\n")
+	}
+	return out
 }
 
 // Snapshot 读取配置摘要与反向代理上游健康。配置读不到时 Reachable=false。

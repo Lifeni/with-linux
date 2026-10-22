@@ -692,7 +692,16 @@ func newFakeServices(t *testing.T) *fakeServices {
 		f.reload++
 		return []byte("ok"), nil
 	}
-	f.svc.Caddy = caddy.NewClientWithOptions(csrv.URL, "/tmp/fake-Caddyfile", "caddy", csrv.Client(), run)
+	configPath := filepath.Join(t.TempDir(), "Caddyfile")
+	var configBody strings.Builder
+	configBody.WriteString("example.com {\n\treverse_proxy 127.0.0.1:8080\n}\n")
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&configBody, "# filler %02d\n", i+1)
+	}
+	if err := os.WriteFile(configPath, []byte(configBody.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Caddy = caddy.NewClientWithOptions(csrv.URL, configPath, "caddy", csrv.Client(), run)
 	return f
 }
 
@@ -877,11 +886,31 @@ func TestCaddyModalButtons(t *testing.T) {
 		t.Fatalf("点 Caddy 卡片后 modal = %d", m.modal)
 	}
 	page := plainPage(m.modalWindow())
-	for _, want := range []string{"Caddy 管理", "systemd", "[刷新]", "重载配置", "[关闭]"} {
+	for _, want := range []string{"Caddy 管理", "systemd", "[刷新]", "[配置文件]", "重载配置", "[关闭]"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("Caddy 弹窗缺少 %q：\n%s", want, page)
 		}
 	}
+
+	nm, cmd = clickModalLabel(t, m, "[配置文件]")
+	m = runCmdOnce(t, nm, cmd)
+	page = plainPage(m.modalWindow())
+	for _, want := range []string{"Caddy 配置", "只读", "Caddyfile", "example.com", "reverse_proxy 127.0.0.1:8080"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("Caddy 配置视图缺少 %q：\n%s", want, page)
+		}
+	}
+	nm, _ = updateModel(m, tea.MouseWheelMsg{X: 1, Y: 1, Button: tea.MouseWheelDown})
+	m = nm
+	if m.caddyConfigScroll == 0 {
+		t.Fatal("Caddy 配置视图滚轮没有滚动")
+	}
+	nm, _ = clickModalLabel(t, m, "[返回]")
+	m = nm
+	if m.caddyMode != caddyStatus || !strings.Contains(plainPage(m.modalWindow()), "Caddy 管理") {
+		t.Fatal("[返回] 没有回到 Caddy 状态视图")
+	}
+
 	systemdBefore := f.countCaddyCalls("systemctl ")
 	nm, cmd = clickModalLabel(t, m, "[刷新]")
 	m = runCmdOnce(t, nm, cmd)

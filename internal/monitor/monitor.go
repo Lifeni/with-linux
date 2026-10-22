@@ -117,6 +117,10 @@ type Model struct {
 	caddySysLoaded  bool
 	caddySysLoading bool
 
+	caddyConfig        caddy.ConfigFile
+	caddyConfigLoading bool
+	caddyConfigSeq     uint64
+
 	caddyReloadAt  time.Time
 	caddyReloadErr error
 	caddyReloading bool
@@ -259,6 +263,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.caddySys = msg.Status
 		m.caddySysErr = msg.Err
 		return m, nil
+	case caddyConfigResult:
+		return m.applyCaddyConfigResult(msg), nil
 	case caddyReloadMsg:
 		m.caddyReloading = false
 		m.caddyReloadErr = msg.Err
@@ -403,6 +409,42 @@ func (m Model) RefreshCaddyNow() (Model, tea.Cmd) {
 // CaddySystemdState 是弹窗要的 systemd 摘要。
 func (m Model) CaddySystemdState() (status caddy.SystemdStatus, err error, loaded, loading bool) {
 	return m.caddySys, m.caddySysErr, m.caddySysLoaded, m.caddySysLoading
+}
+
+// LoadCaddyConfig 读取 Caddyfile 只读内容；旧请求结果由序号丢弃。
+func (m Model) LoadCaddyConfig() (Model, tea.Cmd) {
+	if m.caddy == nil {
+		return m, nil
+	}
+	m.caddyConfigSeq++
+	seq := m.caddyConfigSeq
+	m.caddyConfigLoading = true
+	cl := m.caddy
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cfg := cl.LoadConfigFile(ctx)
+		return caddyConfigResult{Seq: seq, Config: cfg}
+	}
+}
+
+type caddyConfigResult struct {
+	Seq    uint64
+	Config caddy.ConfigFile
+}
+
+func (m Model) applyCaddyConfigResult(msg caddyConfigResult) Model {
+	if msg.Seq != m.caddyConfigSeq {
+		return m
+	}
+	m.caddyConfigLoading = false
+	m.caddyConfig = msg.Config
+	return m
+}
+
+// CaddyConfigState 是只读配置视图的数据。
+func (m Model) CaddyConfigState() (cfg caddy.ConfigFile, loading bool) {
+	return m.caddyConfig, m.caddyConfigLoading
 }
 
 // ReloadCaddy 执行热重载；不做启停/重启。

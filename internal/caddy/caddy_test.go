@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -115,6 +117,42 @@ func TestSystemd(t *testing.T) {
 	}
 	if st.Active != "active" || st.Sub != "running" || st.Restarts != "0" {
 		t.Fatalf("systemd = %+v", st)
+	}
+}
+
+func TestLoadConfigFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Caddyfile")
+	body := "example.com {\r\n\treverse_proxy 127.0.0.1:8080\r\n}\r\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClientWithOptions("", path, "", nil, nil)
+	got := c.LoadConfigFile(context.Background())
+	if got.Err != nil || got.Path != path || got.Truncated {
+		t.Fatalf("LoadConfigFile = %+v", got)
+	}
+	want := []string{"example.com {", "\treverse_proxy 127.0.0.1:8080", "}"}
+	if strings.Join(got.Lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("内容 = %#v, want %#v", got.Lines, want)
+	}
+}
+
+func TestLoadConfigFileMissingAndTruncated(t *testing.T) {
+	missing := NewClientWithOptions("", filepath.Join(t.TempDir(), "missing"), "", nil, nil)
+	if got := missing.LoadConfigFile(context.Background()); got.Err == nil {
+		t.Fatal("缺失文件没有报错")
+	}
+
+	path := filepath.Join(t.TempDir(), "Caddyfile")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxConfigBytes+32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := NewClientWithOptions("", path, "", nil, nil).LoadConfigFile(context.Background())
+	if got.Err != nil || !got.Truncated {
+		t.Fatalf("超限结果 = %+v", got)
+	}
+	if len(got.Lines) != 1 || len(got.Lines[0]) != maxConfigBytes {
+		t.Fatalf("截断长度 = %d", len(got.Lines[0]))
 	}
 }
 

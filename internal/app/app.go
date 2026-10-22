@@ -43,6 +43,13 @@ const (
 	dockerLogs
 )
 
+type caddyModalMode int
+
+const (
+	caddyStatus caddyModalMode = iota
+	caddyConfig
+)
+
 // Model 是 TUI 框架的状态。
 type Model struct {
 	modal       modalKind
@@ -62,6 +69,10 @@ type Model struct {
 	dockerFilter      string
 	dockerFilterDraft string
 	dockerFiltering   bool
+
+	// Caddy 弹窗内部状态。
+	caddyMode         caddyModalMode
+	caddyConfigScroll int
 
 	focusPanel      string          // 非空时整屏放大该面板（bottom 式 expand）
 	contentOverride func() []string // 仅供测试注入多行内容
@@ -539,6 +550,9 @@ func (m Model) dockerLogsBody(limit int) []string {
 }
 
 func (m Model) caddyModalLines() []string {
+	if m.caddyMode == caddyConfig {
+		return m.caddyConfigLines()
+	}
 	limit := max(m.modalMaxHeight()-2, 1)
 	s := m.monitor.CaddySnapshot()
 	value := "查询中…"
@@ -551,13 +565,13 @@ func (m Model) caddyModalLines() []string {
 	}
 	body := make([]string, 0, limit)
 	if !m.monitor.CaddyLoaded() {
-		body = append(body, chart.Dim.Render("首次查询中…"), "", buttonLine("[刷新]", "[关闭]"))
+		body = append(body, chart.Dim.Render("首次查询中…"), "", buttonLine("[刷新]", "[配置文件]", "[关闭]"))
 	} else if !s.Reachable {
 		body = append(body, chart.Red.Render("管理 API 不可达"))
 		if s.Err != nil {
 			body = append(body, chart.Dim.Render(chart.ClampTo(shortErrorText(s.Err), m.modalMaxWidth()-6)))
 		}
-		body = append(body, chart.Dim.Render("systemctl status caddy"), "", buttonLine("[刷新]", "[关闭]"))
+		body = append(body, chart.Dim.Render("systemctl status caddy"), "", buttonLine("[刷新]", "[配置文件]", "[关闭]"))
 	} else {
 		sysText := "systemd [--]"
 		sys, sysErr, loaded, loading := m.monitor.CaddySystemdState()
@@ -591,15 +605,61 @@ func (m Model) caddyModalLines() []string {
 		}
 		body = append(body, "")
 		if reloading {
-			body = append(body, styleInfo.Render("[重载中…]"))
+			body = append(body, styleInfo.Render("[重载中…]"), buttonLine("[配置文件]", "[关闭]"))
 		} else {
-			body = append(body, buttonLine("[刷新]", "[重载配置]", "[关闭]"))
+			body = append(body, buttonLine("[刷新]", "[配置文件]", "[重载配置]", "[关闭]"))
 		}
 	}
 	if len(body) > limit {
 		body = body[:limit]
 	}
 	return m.modalFrame("Caddy 管理", value, body, 66)
+}
+
+func (m Model) caddyConfigWidth() int {
+	return min(m.modalMaxWidth(), 100)
+}
+
+func (m Model) caddyConfigViewRows(limit int) int {
+	return max(limit-3, 1)
+}
+
+func (m Model) caddyConfigLines() []string {
+	limit := max(m.modalMaxHeight()-2, 1)
+	cfg, loading := m.monitor.CaddyConfigState()
+	innerW := m.caddyConfigWidth() - 4
+	body := make([]string, 0, limit)
+	body = append(body, chart.Dim.Render(chart.ClampTo("文件 "+cfg.Path, innerW)))
+	switch {
+	case loading:
+		body = append(body, chart.Dim.Render("读取中…"))
+	case cfg.Err != nil:
+		body = append(body, chart.Red.Render(chart.ClampTo("读取失败："+shortErrorText(cfg.Err), innerW)))
+	case len(cfg.Lines) == 0:
+		body = append(body, chart.Dim.Render("（空文件）"))
+	default:
+		meta := fmt.Sprintf("%d 行 · 只读", len(cfg.Lines))
+		if cfg.Truncated {
+			meta += " · 已截断"
+		}
+		body = append(body, chart.Dim.Render(meta))
+	}
+
+	rows := m.caddyConfigViewRows(limit)
+	if cfg.Err == nil && !loading && len(cfg.Lines) > 0 {
+		maxScroll := max(len(cfg.Lines)-rows, 0)
+		start := clamp(m.caddyConfigScroll, 0, maxScroll)
+		for i := start; i < len(cfg.Lines) && i < start+rows; i++ {
+			prefix := fmt.Sprintf("%4d │ ", i+1)
+			avail := max(innerW-runewidth.StringWidth(prefix), 1)
+			body = append(body, chart.Dim.Render(prefix)+chart.Text.Render(chart.ClampTo(cfg.Lines[i], avail)))
+		}
+	}
+	for len(body) < limit-1 {
+		body = append(body, "")
+	}
+	body = append(body, chart.ClampTo(buttonLine("[刷新]", "[返回]", "[关闭]"), innerW))
+	return m.modalFrame("Caddy 配置", "只读", body, m.caddyConfigWidth())
 }
 
 func clamp(v, lo, hi int) int {
@@ -635,6 +695,8 @@ func (m Model) closeModal() Model {
 	m.modal = modalNone
 	m.modalScroll = 0
 	m.dockerFiltering = false
+	m.caddyMode = caddyStatus
+	m.caddyConfigScroll = 0
 	return m
 }
 
@@ -656,6 +718,8 @@ func (m Model) openDocker() (Model, tea.Cmd) {
 
 func (m Model) openCaddy() (Model, tea.Cmd) {
 	m.modal = modalCaddy
+	m.caddyMode = caddyStatus
+	m.caddyConfigScroll = 0
 	mm, cmd := m.monitor.RefreshCaddySystemd()
 	m.monitor = mm
 	return m, cmd
@@ -762,6 +826,21 @@ func (m Model) caddyClick(msg tea.MouseClickMsg, r overlay.Rect) (Model, tea.Cmd
 	}
 	line := lines[idx]
 	x := msg.X - r.X
+	if m.caddyMode == caddyConfig {
+		switch {
+		case buttonHit(line, x, "[关闭]"):
+			return m.closeModal(), nil
+		case buttonHit(line, x, "[返回]"):
+			m.caddyMode = caddyStatus
+			return m, nil
+		case buttonHit(line, x, "[刷新]"):
+			mm, cmd := m.monitor.LoadCaddyConfig()
+			m.monitor = mm
+			m.caddyConfigScroll = 0
+			return m, cmd
+		}
+		return m, nil
+	}
 	if buttonHit(line, x, "[关闭]") {
 		return m.closeModal(), nil
 	}
@@ -777,7 +856,26 @@ func (m Model) caddyClick(msg tea.MouseClickMsg, r overlay.Rect) (Model, tea.Cmd
 		m.monitor = mm
 		return m, cmd
 	}
+	if buttonHit(line, x, "[配置文件]") {
+		m.caddyMode = caddyConfig
+		m.caddyConfigScroll = 0
+		mm, cmd := m.monitor.LoadCaddyConfig()
+		m.monitor = mm
+		return m, cmd
+	}
 	return m, nil
+}
+
+func (m Model) caddyConfigScrollBy(delta int) Model {
+	cfg, loading := m.monitor.CaddyConfigState()
+	if loading || cfg.Err != nil || len(cfg.Lines) == 0 {
+		return m
+	}
+	limit := max(m.modalMaxHeight()-2, 1)
+	rows := m.caddyConfigViewRows(limit)
+	maxScroll := max(len(cfg.Lines)-rows, 0)
+	m.caddyConfigScroll = clamp(m.caddyConfigScroll+delta, 0, maxScroll)
+	return m
 }
 
 func (m Model) enterDockerLogs() (Model, tea.Cmd) {
@@ -964,6 +1062,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.MouseWheelDown:
 				m = m.dockerScrollBy(3)
 			}
+			return m, nil
+		}
+		if m.modal == modalCaddy && m.caddyMode == caddyConfig {
+			switch msg.Button {
+			case tea.MouseWheelUp:
+				m = m.caddyConfigScrollBy(-3)
+			case tea.MouseWheelDown:
+				m = m.caddyConfigScrollBy(3)
+			}
+			m.modalScroll = 0
 			return m, nil
 		}
 		if m.modal != modalNone {
