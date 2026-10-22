@@ -7,7 +7,9 @@
 package chart
 
 import (
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -125,26 +127,162 @@ func FadeText(s string, width int) string {
 	return stText.Render(head) + out
 }
 
-// FadeRows 按离最近上下边界的行数给列表做对称灰阶渐隐：边界最暗(237)，
-// 向中间依次提亮到 255。矮列表因此也会自然形成上下过渡，而不是把整组行
-// 强行线性分摊到最暗；会移除原 SGR 样式，避免嵌套 ANSI reset 覆盖外层渐隐色。
-func FadeRows(lines []string) []string {
+// FadeRows 按离实际隐藏边界的距离压暗列表行，并保留原有的前景色相。
+// 没有隐藏内容或可见行不足 4 行时不渐隐，避免短列表整组变灰；
+// 只有上方/下方确有隐藏行时才在对应边缘过渡。
+func FadeRows(lines []string, topHidden, bottomHidden bool) []string {
 	out := append([]string(nil), lines...)
-	if len(out) == 0 {
+	if len(out) < 4 || (!topHidden && !bottomHidden) {
 		return out
 	}
-	// 索引即离最近边界的行数。前几档刻意采用非线性步长，保证只有 3–5 行时
-	// 边界与相邻行仍有肉眼可辨的差异，中间行又不会过早变暗。
-	colors := []string{"237", "246", "252", "254", "255"}
+	// 索引即离最近边界的行数。前几档用非线性亮度，边界仍清晰，中间更快恢复原色。
+	brightness := []float64{0.58, 0.72, 0.86, 1}
 	for i := range out {
-		pos := min(i, len(out)-1-i, len(colors)-1)
-		if len(out) == 1 {
-			pos = 2 // 单行同时贴近上下边界，取中间灰阶以保留可读性。
+		factor := 1.0
+		if topHidden {
+			factor = min(factor, brightness[min(i, len(brightness)-1)])
 		}
-		plain := sgrRE.ReplaceAllString(out[i], "")
-		out[i] = lipgloss.NewStyle().Foreground(lipgloss.Color(colors[pos])).Render(plain)
+		if bottomHidden {
+			distance := len(out) - 1 - i
+			factor = min(factor, brightness[min(distance, len(brightness)-1)])
+		}
+		if factor < 1 {
+			out[i] = dimANSI(out[i], factor)
+		}
 	}
 	return out
+}
+
+// dimANSI 把 SGR 前景色调暗但保留色相。只改 256 色与真彩前景色，
+// 其他样式（粗体、重置、背景色等）原样保留。
+func dimANSI(s string, factor float64) string {
+	if factor >= 1 {
+		return s
+	}
+	return sgrRE.ReplaceAllStringFunc(s, func(seq string) string {
+		body := seq[2 : len(seq)-1]
+		if body == "" {
+			return seq
+		}
+		parts := strings.Split(body, ";")
+		out := make([]string, 0, len(parts))
+		for i := 0; i < len(parts); {
+			p := parts[i]
+			n, _ := strconv.Atoi(p)
+			switch {
+			case p == "38" && i+2 < len(parts) && parts[i+1] == "5":
+				idx, err := strconv.Atoi(parts[i+2])
+				if err == nil && idx >= 0 {
+					r, g, b := xtermRGB(idx)
+					out = append(out, "38", "5", strconv.Itoa(nearestXterm(scaleRGB(r, g, b, factor))))
+				} else {
+					out = append(out, parts[i:i+3]...)
+				}
+				i += 3
+			case p == "38" && i+4 < len(parts) && parts[i+1] == "2":
+				r, errR := strconv.Atoi(parts[i+2])
+				g, errG := strconv.Atoi(parts[i+3])
+				b, errB := strconv.Atoi(parts[i+4])
+				if errR == nil && errG == nil && errB == nil {
+					r, g, b = scaleRGB(r, g, b, factor)
+					out = append(out, "38", "2", strconv.Itoa(r), strconv.Itoa(g), strconv.Itoa(b))
+				} else {
+					out = append(out, parts[i:i+5]...)
+				}
+				i += 5
+			case n >= 30 && n <= 37:
+				r, g, b := xtermRGB(n - 30)
+				out = append(out, "38", "5", strconv.Itoa(nearestXterm(scaleRGB(r, g, b, factor))))
+				i++
+			case n >= 90 && n <= 97:
+				r, g, b := xtermRGB(n - 90 + 8)
+				out = append(out, "38", "5", strconv.Itoa(nearestXterm(scaleRGB(r, g, b, factor))))
+				i++
+			default:
+				out = append(out, p)
+				i++
+			}
+		}
+		return "\x1b[" + strings.Join(out, ";") + "m"
+	})
+}
+
+var xtermLevels = [...]int{0, 95, 135, 175, 215, 255}
+
+var xtermBase = [...][3]int{
+	{0, 0, 0}, {128, 0, 0}, {0, 128, 0}, {128, 128, 0},
+	{0, 0, 128}, {128, 0, 128}, {0, 128, 128}, {192, 192, 192},
+	{128, 128, 128}, {255, 0, 0}, {0, 255, 0}, {255, 255, 0},
+	{0, 0, 255}, {255, 0, 255}, {0, 255, 255}, {255, 255, 255},
+}
+
+func xtermRGB(idx int) (r, g, b int) {
+	switch {
+	case idx >= 0 && idx < 16:
+		c := xtermBase[idx]
+		return c[0], c[1], c[2]
+	case idx >= 16 && idx < 232:
+		n := idx - 16
+		return xtermLevels[n/36], xtermLevels[(n/6)%6], xtermLevels[n%6]
+	case idx >= 232 && idx < 256:
+		v := 8 + (idx-232)*10
+		return v, v, v
+	}
+	return 255, 255, 255
+}
+
+func scaleRGB(r, g, b int, factor float64) (int, int, int) {
+	scale := func(v int) int {
+		return max(0, min(255, int(float64(v)*factor+0.5)))
+	}
+	return scale(r), scale(g), scale(b)
+}
+
+func nearestXterm(r, g, b int) int {
+	th, ts, tv := rgbHSV(r, g, b)
+	best, bestScore := 16, math.Inf(1)
+	for idx := 16; idx < 256; idx++ {
+		cr, cg, cb := xtermRGB(idx)
+		ch, cs, cv := rgbHSV(cr, cg, cb)
+		score := math.Abs(tv-cv) + math.Abs(ts-cs)*2
+		if ts >= 0.12 {
+			hueDist := math.Abs(th - ch)
+			hueDist = min(hueDist, 1-hueDist)
+			score += hueDist * 6
+		}
+		if score < bestScore {
+			best, bestScore = idx, score
+		}
+	}
+	return best
+}
+
+func rgbHSV(r, g, b int) (h, s, v float64) {
+	rf, gf, bf := float64(r)/255, float64(g)/255, float64(b)/255
+	hi := math.Max(rf, math.Max(gf, bf))
+	lo := math.Min(rf, math.Min(gf, bf))
+	delta := hi - lo
+	v = hi
+	if hi == 0 {
+		return 0, 0, v
+	}
+	s = delta / hi
+	if delta == 0 {
+		return 0, s, v
+	}
+	switch hi {
+	case rf:
+		h = math.Mod((gf-bf)/delta, 6)
+	case gf:
+		h = (bf-rf)/delta + 2
+	default:
+		h = (rf-gf)/delta + 4
+	}
+	h /= 6
+	if h < 0 {
+		h++
+	}
+	return h, s, v
 }
 
 func max(a, b int) int {

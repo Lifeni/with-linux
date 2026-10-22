@@ -132,7 +132,7 @@ func TestPageShowsSampledValues(t *testing.T) {
 		"内存", "4.0G/8.0G", // used/total
 		"缓存", "3.0G",
 		"网络 enp1s0", "↓ 下载", "50K/s", "35G", "↑ 上传", "51K/s", "23G",
-		"用量", "温度 41°C", "负载 0.37 0.29 0.33",
+		"用量", "温度", "41°C", "负载", "0.37 0.29 0.33",
 		"读14K/s", "写4.0K/s", "IO 1%", "/", "21G/231G", "10%", // df 口径向上取整：9.2% → 10%
 		"/boot",
 		"C0 ", "C7 ", "100%", // 每核是 btop 式横条，带核心编号与百分比
@@ -148,7 +148,9 @@ func TestPageShowsSampledValues(t *testing.T) {
 	if got := strings.Count(wide, "Swap"); got != 1 {
 		t.Errorf("宽屏 Swap 出现了 %d 次，want 1（不能把进度条和明细重复）:\n%s", got, wide)
 	}
-	if !strings.Contains(wide, "用户 30%") || !strings.Contains(wide, "系统 8%") || !strings.Contains(wide, "IO 2%") {
+	if !strings.Contains(wide, "用户") || !strings.Contains(wide, "30%") ||
+		!strings.Contains(wide, "系统") || !strings.Contains(wide, "8%") ||
+		!strings.Contains(wide, "IO") || !strings.Contains(wide, "2%") {
 		t.Errorf("高 CPU 面板缺少 usr/sys/io 分解：\n%s", wide)
 	}
 }
@@ -333,7 +335,7 @@ func TestCPUPanelDegradation(t *testing.T) {
 func TestDiskPanelShowsInodeUsage(t *testing.T) {
 	m := testModel(t, false, false)
 	page := plainPage(m.diskPanel(46, 14))
-	if !strings.Contains(page, "inode 5%") {
+	if !strings.Contains(page, "inode") || !strings.Contains(page, "5%") {
 		t.Errorf("磁盘面板缺少 inode 占用：\n%s", page)
 	}
 }
@@ -364,6 +366,43 @@ func TestMemoryPanelUsesOneMeterAndHistory(t *testing.T) {
 	}
 	if !hasBraille {
 		t.Errorf("内存主面板没有历史图：\n%s", page)
+	}
+}
+
+func TestMetricRowsAlignValuesToColumnEdges(t *testing.T) {
+	rows := metricRows([]metricCell{
+		{label: "可用", value: "1G 10%", style: lipgloss.NewStyle()},
+		{label: "缓存", value: "2G 3%", style: lipgloss.NewStyle()},
+	}, 40, 2)
+	if len(rows) != 1 {
+		t.Fatalf("两格明细应排成一行，实际 %d 行", len(rows))
+	}
+	line := plain(rows[0])
+	if got := lipgloss.Width(line); got != 40 {
+		t.Fatalf("对齐行宽 = %d, want 40：%q", got, line)
+	}
+	if got := lipgloss.Width(line[:strings.Index(line, "%")+1]); got != 19 {
+		t.Errorf("第一列百分比没有贴到列右边界：%q", line)
+	}
+	if got := lipgloss.Width(line[:strings.LastIndex(line, "%")+1]); got != 40 {
+		t.Errorf("第二列百分比没有贴到行右边界：%q", line)
+	}
+}
+
+func TestCPUStatsUseTwoEndedColumns(t *testing.T) {
+	m := testModel(t, false, false)
+	rows := m.cpuStatsRows(48)
+	if len(rows) != 1 {
+		t.Fatalf("宽 CPU 温度/负载应排成一行，实际 %d 行", len(rows))
+	}
+	line := plain(rows[0])
+	for _, want := range []string{"温度", "41°C", "负载", "0.37 0.29 0.33"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("CPU 两端对齐行缺少 %q：%q", want, line)
+		}
+	}
+	if !strings.Contains(line, "温度 ─") || !strings.Contains(line, "负载 ─") {
+		t.Errorf("温度/负载没有使用两端对齐分隔线：%q", line)
 	}
 }
 
@@ -447,7 +486,7 @@ func TestExpandedNetworkShowsRightSideDetails(t *testing.T) {
 		t.Fatalf("网络放大面板出了 %d 行, want 30", len(lines))
 	}
 	page := plainPage(lines)
-	for _, want := range []string{"速率", "接口 enp1s0", "IPv4 192.0.2.10", "累计", "错误"} {
+	for _, want := range []string{"速率", "接口", "enp1s0", "IPv4", "192.0.2.10", "累计", "错误"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("网络放大面板右侧缺少 %q：\n%s", want, page)
 		}
@@ -647,7 +686,7 @@ func TestNetIssueText(t *testing.T) {
 func TestWideNetworkUsesRateSubBox(t *testing.T) {
 	m := testModel(t, false, false)
 	wide := plainPage(m.netPanel(72, 10))
-	for _, want := range []string{"速率", "192.0.2.10", "↓ 下载", "↑ 上传", "累计 ↓ 35G", "↑ 23G"} {
+	for _, want := range []string{"速率", "192.0.2.10", "↓ 下载", "↑ 上传", "↓ 累计", "↑ 累计", "35G", "23G"} {
 		if !strings.Contains(wide, want) {
 			t.Errorf("宽网络面板缺少 %q：\n%s", want, wide)
 		}
@@ -675,7 +714,8 @@ func TestDockerHeaderOnlyWhenTall(t *testing.T) {
 			t.Errorf("高 Docker 卡缺少列头 %q：\n%s", want, tall)
 		}
 	}
-	if !strings.Contains(tallLines[1], "CPU 5%") || !strings.Contains(tallLines[1], "内存 100B") {
+	if !strings.Contains(tallLines[1], "CPU") || !strings.Contains(tallLines[1], "5%") ||
+		!strings.Contains(tallLines[1], "内存") || !strings.Contains(tallLines[1], "100B") {
 		t.Errorf("CPU/内存总量不在内容首行：%q", tallLines[1])
 	}
 	if strings.Contains(tall, "点击管理") {
@@ -732,6 +772,10 @@ func TestDockerPanelScrollsContainerList(t *testing.T) {
 	if strings.Contains(scrolled, "svc-01") || !strings.Contains(scrolled, "svc-06") || !strings.Contains(scrolled, "svc-12") {
 		t.Fatalf("Docker 列表向下滚动不对：\n%s", scrolled)
 	}
+	rawMid := strings.Join(m.dockerPanel(50, 10), "\n")
+	if first := rawLineContaining(rawMid, "svc-06"); strings.Contains(first, "38;5;40") {
+		t.Errorf("Docker 滚到中间后顶部有隐藏内容，首行应保留绿色色相但被压暗：%q", first)
+	}
 	m.dockerScroll = 100
 	end := plainPage(m.dockerPanel(50, 10))
 	if !strings.Contains(end, "svc-12") || !strings.Contains(end, "最忙") {
@@ -739,7 +783,7 @@ func TestDockerPanelScrollsContainerList(t *testing.T) {
 	}
 }
 
-func TestDockerListFadesAtBothEdges(t *testing.T) {
+func TestDockerShortListKeepsOriginalColors(t *testing.T) {
 	m := testModel(t, false, false)
 	m.dockerLoaded = true
 	for i := 1; i <= 4; i++ {
@@ -752,10 +796,10 @@ func TestDockerListFadesAtBothEdges(t *testing.T) {
 	m.dockerSnap.Total = len(m.dockerSnap.Containers)
 
 	raw := strings.Join(m.dockerPanel(50, 12), "\n")
-	for i, color := range []string{"237", "246", "246", "237"} {
+	for i := 0; i < 4; i++ {
 		line := rawLineContaining(raw, fmt.Sprintf("svc-%02d", i+1))
-		if !strings.Contains(line, "38;5;"+color) {
-			t.Errorf("Docker 顶部视口第 %d 行应为双端渐隐色 %s：%q", i, color, line)
+		if !strings.Contains(line, "38;5;40") {
+			t.Errorf("Docker 短列表第 %d 行没有隐藏内容，应保留原始绿色：%q", i, line)
 		}
 	}
 }
@@ -781,15 +825,20 @@ func TestCaddyPanelScrollsDomainRows(t *testing.T) {
 	if strings.Contains(scrolled, "domain-01.example") || !strings.Contains(scrolled, "domain-06.example") {
 		t.Fatalf("Caddy 列表向下滚动不对：\n%s", scrolled)
 	}
+	rawMid := strings.Join(m.caddyPanel(50, 8), "\n")
+	if first := rawLineContaining(rawMid, "domain-06.example"); strings.Contains(first, "38;5;40") {
+		t.Errorf("Caddy 滚到中间后顶部有隐藏内容，首行应保留绿色色相但被压暗：%q", first)
+	}
 	m.caddyScroll = 100
 	end := plainPage(m.caddyPanel(50, 8))
-	if !strings.Contains(end, "domain-10.example") || !strings.Contains(end, "API http://127.0.0.1:2019") ||
-		!strings.Contains(end, "文件 /tmp/Caddyfile") {
+	if !strings.Contains(end, "domain-10.example") || !strings.Contains(end, "API") ||
+		!strings.Contains(end, "http://127.0.0.1:2019") ||
+		!strings.Contains(end, "文件") || !strings.Contains(end, "/tmp/Caddyfile") {
 		t.Fatalf("Caddy 列表末端应显示 API 与配置文件：\n%s", end)
 	}
 }
 
-func TestCaddyListFadesAtBothEdges(t *testing.T) {
+func TestCaddyShortListKeepsOriginalColors(t *testing.T) {
 	m := testModel(t, false, false)
 	m.caddyLoaded = true
 	m.caddySnap = caddy.Snapshot{
@@ -801,18 +850,11 @@ func TestCaddyListFadesAtBothEdges(t *testing.T) {
 	}
 
 	raw := strings.Join(m.caddyPanel(50, 9), "\n")
-	for i, color := range []string{"237", "246", "252", "252", "246", "237"} {
+	for i := 0; i < 4; i++ {
 		needle := fmt.Sprintf("domain-%02d.example", i+1)
-		if i >= 4 {
-			if i == 4 {
-				needle = "API http://127.0.0.1:2019"
-			} else {
-				needle = "文件 /tmp/Caddyfile"
-			}
-		}
 		line := rawLineContaining(raw, needle)
-		if !strings.Contains(line, "38;5;"+color) {
-			t.Errorf("Caddy 顶部视口第 %d 行应为双端渐隐色 %s：%q", i, color, line)
+		if !strings.Contains(line, "38;5;40") {
+			t.Errorf("Caddy 短列表第 %d 行没有隐藏内容，应保留原始绿色：%q", i, line)
 		}
 	}
 }

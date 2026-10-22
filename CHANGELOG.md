@@ -2,6 +2,14 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- Docker/Caddy 短列表不再被整体改成灰色：可见行少于 4 行或对应方向没有隐藏内容时保持原始颜色。
+- 服务卡需要渐隐时只压暗原 SGR 前景色并保留绿/红/琥珀等色相，不再删除 ANSI 样式后套统一灰阶。
+- 系统面板的明细标签与数值统一两端对齐：CPU 温度/负载及用户/系统/IO、内存、磁盘、网络、Docker/Caddy 摘要按等宽列右对齐，宽度不足时自动降列。
+
 ## [0.5.1] - 2026-10-22
 
 ### Added

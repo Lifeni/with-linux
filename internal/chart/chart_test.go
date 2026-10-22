@@ -2,6 +2,7 @@ package chart
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -72,36 +73,94 @@ func TestFadeText(t *testing.T) {
 	}
 }
 
-func TestFadeRowsAtBothEdges(t *testing.T) {
+func TestFadeRowsPreservesColorsAtBothEdges(t *testing.T) {
 	lines := []string{
-		Text.Render("first"),
-		Dim.Render("second"),
+		Green.Render("first"),
+		Green.Render("second"),
 		Green.Render("third"),
-		Red.Render("fourth"),
-		Text.Render("fifth"),
-		Dim.Render("sixth"),
+		Green.Render("fourth"),
+		Green.Render("fifth"),
+		Green.Render("sixth"),
 	}
-	got := FadeRows(lines)
+	got := FadeRows(lines, true, true)
 	for i, want := range []string{"first", "second", "third", "fourth", "fifth", "sixth"} {
 		if plain(got[i]) != want {
 			t.Errorf("第 %d 行可见文本 = %q, want %q", i, plain(got[i]), want)
 		}
 	}
-	for i, color := range []string{"237", "246", "252", "252", "246", "237"} {
-		if !strings.Contains(got[i], "38;5;"+color) {
-			t.Errorf("第 %d 行没有使用双端渐隐色 %s：%q", i, color, got[i])
+	for i, line := range got {
+		idx := firstForegroundIndex(t, line)
+		r, g, b := xtermRGB(idx)
+		if g <= r || g <= b {
+			t.Errorf("第 %d 行丢失了绿色色相：index=%d rgb=(%d,%d,%d)：%q", i, idx, r, g, b, line)
 		}
 	}
 }
 
-func TestFadeRowsShortListIsSymmetricAndNonLinear(t *testing.T) {
-	got := FadeRows([]string{"one", "two", "three"})
-	for i, color := range []string{"237", "246", "237"} {
-		if !strings.Contains(got[i], "38;5;"+color) {
-			t.Errorf("三行列表第 %d 行没有使用 %s：%q", i, color, got[i])
+func TestFadeRowsSkipsShortOrUnhiddenLists(t *testing.T) {
+	short := []string{Green.Render("one"), Red.Render("two"), Green.Render("three")}
+	for i, got := range FadeRows(short, true, true) {
+		if got != short[i] {
+			t.Errorf("三行列表不应渐隐，第 %d 行被改了：%q", i, got)
 		}
 	}
-	if single := FadeRows([]string{"only"})[0]; !strings.Contains(single, "38;5;252") {
-		t.Errorf("单行列表应使用可读的中间灰阶：%q", single)
+	lines := []string{Green.Render("one"), Red.Render("two"), Green.Render("three"), Red.Render("four")}
+	for i, got := range FadeRows(lines, false, false) {
+		if got != lines[i] {
+			t.Errorf("没有隐藏内容时不应渐隐，第 %d 行被改了：%q", i, got)
+		}
 	}
+}
+
+func TestFadeRowsOnlyDimsHiddenEdge(t *testing.T) {
+	lines := []string{
+		Green.Render("one"),
+		Green.Render("two"),
+		Green.Render("three"),
+		Green.Render("four"),
+	}
+	got := FadeRows(lines, false, true)
+	if got[0] != lines[0] {
+		t.Errorf("顶部没有隐藏内容时首行应保持原色：%q", got[0])
+	}
+	if got[3] == lines[3] {
+		t.Errorf("底部隐藏时末行应压暗：%q", got[3])
+	}
+}
+
+func TestDimANSIKeepsRedAndAmberHue(t *testing.T) {
+	cases := []struct {
+		name  string
+		style lipgloss.Style
+		check func(r, g, b int) bool
+	}{
+		{"red", Red, func(r, g, b int) bool { return r > g && r > b }},
+		{"amber", Amber, func(r, g, b int) bool { return r > g && g > b }},
+	}
+	for _, c := range cases {
+		idx := firstForegroundIndex(t, dimANSI(c.style.Render("x"), 0.58))
+		r, g, b := xtermRGB(idx)
+		if !c.check(r, g, b) {
+			t.Errorf("%s 渐隐后色相改变：index=%d rgb=(%d,%d,%d)", c.name, idx, r, g, b)
+		}
+	}
+}
+
+func firstForegroundIndex(t *testing.T, s string) int {
+	t.Helper()
+	const marker = "38;5;"
+	i := strings.Index(s, marker)
+	if i < 0 {
+		t.Fatalf("没有 256 色前景色：%q", s)
+	}
+	j := i + len(marker)
+	k := j
+	for k < len(s) && s[k] >= '0' && s[k] <= '9' {
+		k++
+	}
+	idx, err := strconv.Atoi(s[j:k])
+	if err != nil {
+		t.Fatalf("解析前景色失败：%q", s)
+	}
+	return idx
 }
