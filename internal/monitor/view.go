@@ -3,6 +3,7 @@ package monitor
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -323,7 +324,7 @@ func dockerListRows(innerH int) int {
 }
 
 func caddyListRows(innerH int) int {
-	return max(innerH-1, 0)
+	return max(innerH-2, 0)
 }
 
 func (m Model) dockerSummary(width int) string {
@@ -615,15 +616,7 @@ func metricRows(cells []metricCell, width, maxCols int) []string {
 		cols--
 	}
 
-	widths := make([]int, cols)
-	avail := width - 2*(cols-1)
-	base, rem := avail/cols, avail%cols
-	for i := range widths {
-		widths[i] = base
-		if i < rem {
-			widths[i]++
-		}
-	}
+	widths := splitWidths(width, cols, 2)
 
 	out := make([]string, 0, (len(cells)+cols-1)/cols)
 	for start := 0; start < len(cells); start += cols {
@@ -642,6 +635,23 @@ func metricRows(cells []metricCell, width, maxCols int) []string {
 		out = append(out, chart.ClampTo(b.String(), width))
 	}
 	return out
+}
+
+// splitWidths 把 width 分给 cols 个单元格，中间各留 gap 格；余数从左到右分配。
+func splitWidths(width, cols, gap int) []int {
+	if cols <= 0 {
+		return nil
+	}
+	widths := make([]int, cols)
+	avail := max(width-gap*(cols-1), cols)
+	base, rem := avail/cols, avail%cols
+	for i := range widths {
+		widths[i] = base
+		if i < rem {
+			widths[i]++
+		}
+	}
+	return widths
 }
 
 // finishPanel 把面板内容裁/补到 height 行；内容不足时补空行，不再塞分隔线。
@@ -935,7 +945,7 @@ func (m Model) coreColumnsSized(width, maxRows, graphH int) (lines []string, hid
 	}
 	graphH = max(graphH, 1)
 	cols := 2
-	if width < 30 {
+	if width < 42 {
 		cols = 1
 	}
 	perCol := (len(cores) + cols - 1) / cols
@@ -943,12 +953,12 @@ func (m Model) coreColumnsSized(width, maxRows, graphH int) (lines []string, hid
 	hidden = max(len(cores)-rows*cols, 0)
 	// 有富余高度才加「+N 核未显示」那行；不为了一行提示少显示两个核
 	withNote := hidden > 0 && rows < maxRows
-	colW := (width - 2*(cols-1)) / cols
-	graphW := max(colW-10, 4) // 「C0  」4 ＋ 空格 ＋ 空格 ＋ 「100%」4
+	widths := splitWidths(width, cols, 2)
 
 	for r := 0; r < rows; r++ {
 		cells := make([][]string, cols)
 		for c := 0; c < cols; c++ {
+			colW := widths[c]
 			idx := c*perCol + r
 			if idx >= len(cores) {
 				cells[c] = make([]string, graphH)
@@ -964,7 +974,11 @@ func (m Model) coreColumnsSized(width, maxRows, graphH int) (lines []string, hid
 			v := cores[idx]
 			// 小图一个点列对应 1 秒（一个 braille 字符含 2 个点列，所以每秒移动半格）。
 			// 只取最近 slots 个样本；否则 120 个点塞进十几格，每秒只移动零点几个点列。
-			// 颜色固定，历史柱体不随当前值换色。
+			// 颜色固定，历史柱体不随当前值换色。图宽吃掉标签和百分比后的
+			// 全部剩余格数，确保百分比贴住该子列右边界。
+			prefixW := lipgloss.Width(chart.Text.Render(fmt.Sprintf("C%-2d", idx)) + " ")
+			suffixW := lipgloss.Width(" " + chart.PctStyle(v).Render(fmt.Sprintf("%3d%%", chart.PctValue(v))))
+			graphW := max(colW-prefixW-suffixW, 4)
 			slots := max(graphW*2, 4)
 			graph := chart.Fill(tailHist(hist, slots), slots, graphW, graphH, 0, 100, chart.SeriesBlue)
 			cells[c] = make([]string, graphH)
@@ -1517,10 +1531,10 @@ func (m Model) caddyPanel(w, h int) []string {
 	}
 	leftW := max((innerW-3)/2, 8)
 	rightW := max(innerW-3-leftW, 8)
-	health := "上游 [--]"
+	healthValue := "[--]"
 	healthStyle := chart.Dim
 	if s.UpstreamsErr == nil {
-		health = fmt.Sprintf("上游 %d/%d", s.Healthy, len(s.Upstreams))
+		healthValue = fmt.Sprintf("%d/%d", s.Healthy, len(s.Upstreams))
 		switch {
 		case s.Healthy == len(s.Upstreams):
 			healthStyle = chart.Green
@@ -1530,12 +1544,12 @@ func (m Model) caddyPanel(w, h int) []string {
 			healthStyle = chart.Red
 		}
 	}
-	headerLeft := fmt.Sprintf("域名 %d · %d 路由", len(s.Domains), s.Routes)
-	lines := []string{twoColumnLine(
-		chart.SeriesCyan.Render(chart.ClampTo(headerLeft, leftW)),
-		healthStyle.Render(chart.ClampTo(health, rightW)),
-		leftW, rightW,
-	)}
+	lines := metricRows([]metricCell{
+		{label: "域名", value: strconv.Itoa(len(s.Domains)), style: chart.SeriesCyan},
+		{label: "路由", value: strconv.Itoa(s.Routes), style: chart.SeriesCyan},
+		{label: "上游", value: healthValue, style: healthStyle},
+		{label: "请求", value: strconv.Itoa(s.Requests), style: chart.Dim},
+	}, innerW, 2)
 	body := make([]string, 0, max(len(s.Domains), len(s.Upstreams))+3)
 	rows := max(len(s.Domains), len(s.Upstreams))
 	for i := 0; i < rows; i++ {

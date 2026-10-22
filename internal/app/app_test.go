@@ -263,57 +263,95 @@ func TestPanelExpandsAndReturns(t *testing.T) {
 	}
 }
 
-func TestOnlyQQuits(t *testing.T) {
-	msgs := []tea.KeyPressMsg{
-		keyPress('Q'),
+func TestKeyboardQuitAndEscape(t *testing.T) {
+	quitKeys := []tea.KeyPressMsg{
+		keyPress('q'), keyPress('Q'),
 		tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}),
 		tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}),
-		keyPress('s'), keyPress('S'), keyPress('d'), keyPress('D'),
-		keyPress('c'), keyPress('C'), keyPress('R'), keyPress('r'),
-		tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}),
-		tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}),
 	}
-	for _, start := range []func(Model) Model{
-		func(m Model) Model { return m },
-		func(m Model) Model { return enterSettings(t, m) },
-	} {
-		m := start(newTestModel())
-		_, cmd := updateModel(m, keyPress('q'))
+	for _, msg := range quitKeys {
+		m := newTestModel()
+		_, cmd := updateModel(m, msg)
 		if cmd == nil {
-			t.Fatalf("modal %d 下 q 没有返回 Cmd", m.modal)
+			t.Fatalf("%v 在主页面没有返回 Cmd", msg)
 		}
 		if _, ok := cmd().(tea.QuitMsg); !ok {
-			t.Fatalf("modal %d 下 q 产出 %T", m.modal, cmd())
+			t.Fatalf("%v 在主页面产出 %T", msg, cmd())
 		}
-		before := m.modal
-		for _, msg := range msgs {
-			nm, cmd := updateModel(m, msg)
+	}
+
+	for _, msg := range append(quitKeys[:3], tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc})) {
+		m := enterSettings(t, newTestModel())
+		nm, cmd := updateModel(m, msg)
+		if msg.String() == "esc" {
 			if cmd != nil {
 				if _, quit := cmd().(tea.QuitMsg); quit {
-					t.Fatalf("modal %d 下 %v 触发了退出", m.modal, msg)
+					t.Fatal("Esc 在弹窗内不应退出应用")
 				}
 			}
-			if got := nm.modal; got != before {
-				t.Fatalf("%v 后 modal = %d, want %d", msg, got, before)
+			if nm.modal != modalNone {
+				t.Fatalf("Esc 后 modal = %d, want none", nm.modal)
 			}
+			continue
 		}
+		if cmd == nil {
+			t.Fatalf("%v 在弹窗内没有返回 Cmd", msg)
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatalf("%v 在弹窗内产出 %T", msg, cmd())
+		}
+	}
+
+	m := newTestModel()
+	m.focusPanel = monitor.PanelCPU
+	nm, _ := updateModel(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	if nm.focusPanel != "" || nm.modal != modalNone {
+		t.Fatalf("Esc 应退出放大态：focus=%q modal=%d", nm.focusPanel, nm.modal)
 	}
 }
 
-func TestNoShortcutOpensOrClosesModal(t *testing.T) {
-	m := newTestModel()
-	for _, key := range []rune{'s', 'S', 'd', 'D', 'c', 'C'} {
+func TestKeyboardShortcutsOpenAndRefresh(t *testing.T) {
+	for key, want := range map[rune]modalKind{
+		's': modalSettings,
+		'd': modalDocker,
+		'c': modalCaddy,
+	} {
+		m := newTestModel()
 		nm, _ := updateModel(m, keyPress(key))
-		if got := nm.modal; got != modalNone {
-			t.Errorf("%c 打开了弹窗 modal = %d", key, got)
+		if nm.modal != want {
+			t.Errorf("%c 打开 modal = %d, want %d", key, nm.modal, want)
+		}
+		nm, _ = updateModel(nm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+		if nm.modal != modalNone {
+			t.Errorf("%c 打开的弹窗未能用 Esc 关闭：%d", key, nm.modal)
 		}
 	}
-	m = enterSettings(t, m)
-	for _, key := range []rune{'s', 'd', 'c'} {
-		nm, _ := updateModel(m, keyPress(key))
-		if got := nm.modal; got != modalSettings {
-			t.Errorf("%c 改变了弹窗 modal = %d", key, got)
-		}
+
+	m := newTestModel()
+	if _, cmd := updateModel(m, keyPress('r')); cmd == nil {
+		t.Fatal("r 在主页应触发刷新")
+	}
+}
+
+func TestKeyboardSelectsDockerContainer(t *testing.T) {
+	f := newFakeServices(t)
+	m := primeDocker(t, fakeModel(t, f))
+	nm, _ := updateModel(m, keyPress('d'))
+	m = nm
+	if m.modal != modalDocker {
+		t.Fatalf("d 没有打开 Docker：%d", m.modal)
+	}
+	nm, _ = updateModel(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if nm.dockerSel != 1 {
+		t.Fatalf("Down 后 dockerSel = %d, want 1", nm.dockerSel)
+	}
+	nm, _ = updateModel(nm, tea.KeyPressMsg(tea.Key{Code: tea.KeyHome}))
+	if nm.dockerSel != 0 {
+		t.Fatalf("Home 后 dockerSel = %d, want 0", nm.dockerSel)
+	}
+	nm, _ = updateModel(nm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}))
+	if nm.dockerSel != 1 {
+		t.Fatalf("End 后 dockerSel = %d, want 1", nm.dockerSel)
 	}
 }
 
@@ -396,25 +434,27 @@ func TestSettingsModalEditSaveAndCancel(t *testing.T) {
 	}
 }
 
-func TestSettingsEditingUsesOnlyMouseButtons(t *testing.T) {
+func TestSettingsEditingKeyboardBehavior(t *testing.T) {
 	m := enterSettings(t, newTestModel())
 	nm, _ := clickModalLine(t, m, "OpenCode Key", 20)
 	m = nm
 	if !m.settings.Editing() {
 		t.Fatal("未进入编辑")
 	}
-	// Enter/Esc 不再保存/取消；q 是文本。
+	// Enter 不保存；q 是文本；Esc 直接关闭整个弹窗。
 	nm, _ = updateModel(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	m = nm
-	nm, _ = updateModel(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 	m = nm
 	nm, _ = updateModel(m, keyPress('q'))
 	m = nm
 	if !m.settings.Editing() {
-		t.Fatal("键盘退出/保存了编辑态")
+		t.Fatal("Enter 或 q 意外退出编辑态")
 	}
 	if m.modal != modalSettings {
 		t.Fatalf("q 在输入框里触发了模态变化：%d", m.modal)
+	}
+	nm, _ = updateModel(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	if nm.modal != modalNone {
+		t.Fatalf("Esc 未关闭设置弹窗：%d", nm.modal)
 	}
 }
 
@@ -513,20 +553,21 @@ func TestSettingsModalFooterInsideFrame(t *testing.T) {
 
 func TestButtonLineSpreadsEndToEnd(t *testing.T) {
 	for _, tc := range []struct {
-		width  int
-		labels []string
+		width int
+		left  []string
+		right []string
 	}{
-		{40, []string{"[保存]", "[取消]"}},
-		{78, []string{"[停止]", "[重启]", "[日志]", "[刷新]", "[关闭]"}},
+		{40, []string{"[保存]"}, []string{"[取消]"}},
+		{78, []string{"[停止]", "[重启]", "[日志]"}, []string{"[刷新]", "[关闭]"}},
 	} {
-		line := plain(buttonLine(tc.width, tc.labels...))
+		line := plain(buttonLine(tc.width, tc.left, tc.right))
 		if got := lipgloss.Width(line); got != tc.width {
 			t.Errorf("按钮行宽 = %d, want %d：%q", got, tc.width, line)
 		}
-		if !strings.HasPrefix(line, tc.labels[0]) {
+		if !strings.HasPrefix(line, tc.left[0]) {
 			t.Errorf("首个按钮没有贴左：%q", line)
 		}
-		last := tc.labels[len(tc.labels)-1]
+		last := tc.right[len(tc.right)-1]
 		if !strings.HasSuffix(line, last) {
 			t.Errorf("末个按钮没有贴右：%q", line)
 		}
@@ -549,6 +590,14 @@ func TestSettingsModalWheelScroll(t *testing.T) {
 	if got := nm.modalScroll; got != 0 {
 		t.Fatalf("上滚后 modalScroll = %d", got)
 	}
+	nm, _ = updateModel(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+	if nm.modalScroll <= 0 {
+		t.Fatal("PgDn 没有滚动弹窗")
+	}
+	nm, _ = updateModel(nm, tea.KeyPressMsg(tea.Key{Code: tea.KeyHome}))
+	if nm.modalScroll != 0 {
+		t.Fatalf("Home 后 modalScroll = %d", nm.modalScroll)
+	}
 }
 
 func TestMonitorWheelAndResize(t *testing.T) {
@@ -563,6 +612,18 @@ func TestMonitorWheelAndResize(t *testing.T) {
 	nm, _ := updateModel(m, tea.MouseWheelMsg{X: 5, Y: 5, Button: tea.MouseWheelDown})
 	if got := nm.scroll; got != 1 {
 		t.Fatalf("滚轮后 scroll = %d", got)
+	}
+	nm, _ = updateModel(nm, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if got := nm.scroll; got != 2 {
+		t.Fatalf("Down 后 scroll = %d", got)
+	}
+	nm, _ = updateModel(nm, tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+	if got := nm.scroll; got <= 2 {
+		t.Fatalf("PgDn 后 scroll = %d", got)
+	}
+	nm, _ = updateModel(nm, tea.KeyPressMsg(tea.Key{Code: tea.KeyHome}))
+	if got := nm.scroll; got != 0 {
+		t.Fatalf("Home 后 scroll = %d", got)
 	}
 	nm, _ = updateModel(nm, tea.WindowSizeMsg{Width: 80, Height: 28})
 	if got := nm; got.scroll > got.maxScroll() {
@@ -913,6 +974,14 @@ func TestCaddyModalButtons(t *testing.T) {
 			t.Fatalf("Caddy 弹窗缺少 %q：\n%s", want, page)
 		}
 	}
+
+	nm, cmd = clickModalLine(t, m, "文件 ", 20)
+	m = runCmdOnce(t, nm, cmd)
+	if m.caddyMode != caddyConfig || !strings.Contains(plainPage(m.modalWindow()), "Caddy 配置") {
+		t.Fatal("点击配置文件路径没有打开配置视图")
+	}
+	nm, _ = clickModalLabel(t, m, "[返回]")
+	m = nm
 
 	nm, cmd = clickModalLabel(t, m, "[配置文件]")
 	m = runCmdOnce(t, nm, cmd)

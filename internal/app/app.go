@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -188,9 +189,9 @@ func (m Model) modalContent() []string {
 			footer = append(footer, chart.ClampTo(st.Render(text), w))
 		}
 		if m.settings.Editing() {
-			footer = append(footer, buttonLine(w, "[保存]", "[取消]"))
+			footer = append(footer, buttonLine(w, []string{"[保存]"}, []string{"[取消]"}))
 		} else {
-			footer = append(footer, buttonLine(w, "[关闭]"))
+			footer = append(footer, buttonLine(w, nil, []string{"[关闭]"}))
 		}
 		return m.settings.ModalLines(m.modalMaxWidth(), footer...)
 	case modalDocker:
@@ -230,42 +231,58 @@ func (m Model) modalRect() overlay.Rect {
 
 var styleAction = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("68"))
 
-// buttonLine 渲染一行鼠标按钮；labels 含方括号（如 `[停止]`）。
-// 多按钮时首按钮贴左、末按钮贴右，剩余空间均分为按钮间隔。
-func buttonLine(width int, labels ...string) string {
-	parts := make([]string, 0, len(labels))
-	for _, label := range labels {
-		parts = append(parts, styleAction.Render(label))
+// buttonLine 渲染“左侧操作组 + 右侧关闭/返回组”的按钮行。
+func buttonLine(width int, left, right []string) string {
+	render := func(labels []string) (string, int) {
+		parts := make([]string, 0, len(labels))
+		total := 0
+		for _, label := range labels {
+			part := styleAction.Render(label)
+			parts = append(parts, part)
+			total += lipgloss.Width(part)
+		}
+		if len(parts) == 0 {
+			return "", 0
+		}
+		return strings.Join(parts, "  "), total + 2*len(parts) - 2
 	}
-	if len(parts) == 0 {
+	leftText, leftW := render(left)
+	rightText, rightW := render(right)
+	if leftText == "" && rightText == "" {
 		return strings.Repeat(" ", max(width, 0))
 	}
-	if len(parts) == 1 {
-		return chart.PadTo(parts[0], width)
+	if rightText == "" {
+		return chart.PadTo(leftText, width)
 	}
-	total := 0
-	for _, part := range parts {
-		total += lipgloss.Width(part)
+	if leftText == "" {
+		return strings.Repeat(" ", max(width-rightW, 0)) + rightText
 	}
-	gaps := len(parts) - 1
-	if total+2*gaps > width {
-		return chart.ClampTo(strings.Join(parts, "  "), width)
+	gap := width - leftW - rightW
+	if gap < 2 {
+		return chart.ClampTo(leftText+"  "+rightText, width)
 	}
-	free := width - total
-	base, rem := free/gaps, free%gaps
-	var b strings.Builder
-	for i, part := range parts {
-		b.WriteString(part)
-		if i == gaps {
-			continue
-		}
-		gap := base
-		if i < rem {
-			gap++
-		}
-		b.WriteString(strings.Repeat(" ", gap))
+	return leftText + strings.Repeat(" ", gap) + rightText
+}
+
+// alignedField 把弹窗里的标签贴左、值贴右，长值优先截断值本身。
+func alignedField(label, value string, width int, style lipgloss.Style) string {
+	if width <= 0 {
+		return ""
 	}
-	return b.String()
+	labelW := lipgloss.Width(label)
+	if lipgloss.Width(value)+labelW+1 > width {
+		value = runewidth.Truncate(value, max(width-labelW-1, 1), "…")
+	}
+	left := style.Render(label)
+	right := style.Render(value)
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		return chart.ClampTo(left+" "+right, width)
+	}
+	if gap < 4 {
+		return left + strings.Repeat(" ", gap) + right
+	}
+	return left + " " + chart.Dim.Render(strings.Repeat("─", gap-2)) + " " + right
 }
 
 // buttonHit 判断点击是否落在某行的 label 上（x 是相对弹窗左边缘的列）。
@@ -278,6 +295,17 @@ func buttonHit(line string, x int, label string) bool {
 	start := runewidth.StringWidth(plain[:i])
 	end := start + runewidth.StringWidth(label)
 	return x >= start && x < end
+}
+
+// tailHit 判断点击是否落在 marker 之后的内容区（用于可点击的值/路径行）。
+func tailHit(line string, x int, marker string) bool {
+	plain := stripANSI(line)
+	i := strings.Index(plain, marker)
+	if i < 0 {
+		return false
+	}
+	start := runewidth.StringWidth(plain[:i])
+	return x >= start && x < runewidth.StringWidth(plain)
 }
 
 func padCell(s string, width int) string {
@@ -333,11 +361,11 @@ func (m Model) dockerListBody(limit int) []string {
 	s := m.monitor.DockerSnapshot()
 	body := make([]string, 0, limit)
 	if !m.monitor.DockerLoaded() {
-		body = append(body, chart.Dim.Render("首次查询中…"), "", buttonLine(m.dockerModalWidth()-4, "[刷新]", "[关闭]"))
+		body = append(body, chart.Dim.Render("首次查询中…"), "", buttonLine(m.dockerModalWidth()-4, []string{"[刷新]"}, []string{"[关闭]"}))
 		return body
 	}
 	if s.Err != nil {
-		body = append(body, chart.Red.Render("Docker 不可达"), chart.Dim.Render(shortErrorText(s.Err)), "", buttonLine(m.dockerModalWidth()-4, "[刷新]", "[关闭]"))
+		body = append(body, chart.Red.Render("Docker 不可达"), chart.Dim.Render(shortErrorText(s.Err)), "", buttonLine(m.dockerModalWidth()-4, []string{"[刷新]"}, []string{"[关闭]"}))
 		return body
 	}
 	summary := chart.FitFields([]string{
@@ -347,7 +375,7 @@ func (m Model) dockerListBody(limit int) []string {
 	}, " · ", m.dockerModalWidth()-4)
 	body = append(body, summary)
 	if len(s.Containers) == 0 {
-		body = append(body, chart.Dim.Render("没有容器"), "", buttonLine(m.dockerModalWidth()-4, "[刷新]", "[关闭]"))
+		body = append(body, chart.Dim.Render("没有容器"), "", buttonLine(m.dockerModalWidth()-4, []string{"[刷新]"}, []string{"[关闭]"}))
 		return body
 	}
 
@@ -385,8 +413,10 @@ func (m Model) dockerListBody(limit int) []string {
 	if c, ok := m.dockerSelected(); ok && !c.Running {
 		action = "启动"
 	}
-	buttons := []string{"[" + action + "]", "[重启]", "[日志]", "[刷新]", "[关闭]"}
-	body = append(body, buttonLine(innerW, buttons...))
+	body = append(body, buttonLine(innerW,
+		[]string{"[" + action + "]", "[重启]", "[日志]"},
+		[]string{"[刷新]", "[关闭]"},
+	))
 	if len(body) > limit {
 		body = body[:limit]
 	}
@@ -568,9 +598,12 @@ func (m Model) dockerLogsBody(limit int) []string {
 		}
 	}
 	if m.dockerFiltering {
-		body = append(body, buttonLine(innerW, "[应用]", "[取消]"))
+		body = append(body, buttonLine(innerW, []string{"[应用]"}, []string{"[取消]"}))
 	} else {
-		body = append(body, buttonLine(innerW, "[刷新]", "[过滤]", "[返回]", "[关闭]"))
+		body = append(body, buttonLine(innerW,
+			[]string{"[刷新]", "[过滤]"},
+			[]string{"[返回]", "[关闭]"},
+		))
 	}
 	if len(body) > limit {
 		body = body[:limit]
@@ -595,13 +628,13 @@ func (m Model) caddyModalLines() []string {
 	}
 	body := make([]string, 0, limit)
 	if !m.monitor.CaddyLoaded() {
-		body = append(body, chart.Dim.Render("首次查询中…"), "", buttonLine(innerW, "[刷新]", "[配置文件]", "[关闭]"))
+		body = append(body, chart.Dim.Render("首次查询中…"), "", buttonLine(innerW, []string{"[刷新]", "[配置文件]"}, []string{"[关闭]"}))
 	} else if !s.Reachable {
 		body = append(body, chart.Red.Render("管理 API 不可达"))
 		if s.Err != nil {
 			body = append(body, chart.Dim.Render(chart.ClampTo(shortErrorText(s.Err), m.modalMaxWidth()-6)))
 		}
-		body = append(body, chart.Dim.Render("systemctl status caddy"), "", buttonLine(innerW, "[刷新]", "[配置文件]", "[关闭]"))
+		body = append(body, chart.Dim.Render("systemctl status caddy"), "", buttonLine(innerW, []string{"[刷新]", "[配置文件]"}, []string{"[关闭]"}))
 	} else {
 		sysText := "systemd [--]"
 		sys, sysErr, loaded, loading := m.monitor.CaddySystemdState()
@@ -611,16 +644,18 @@ func (m Model) caddyModalLines() []string {
 		case loaded && sysErr == nil:
 			sysText = fmt.Sprintf("systemd %s (%s) · 重启 %s", sys.Active, sys.Sub, sys.Restarts)
 		}
-		health := "上游 [--]"
+		upstream := "[--]"
 		if s.UpstreamsErr == nil {
-			health = fmt.Sprintf("上游 %d/%d · 请求 %d", s.Healthy, len(s.Upstreams), s.Requests)
+			upstream = fmt.Sprintf("%d/%d", s.Healthy, len(s.Upstreams))
 		}
 		body = append(body,
-			chart.Text.Render("状态  ")+styleOK.Render("● 运行中"),
-			chart.Dim.Render("服务  "+sysText),
-			chart.Dim.Render("管理  "+s.AdminURL+" 可达"),
-			chart.Dim.Render(fmt.Sprintf("配置  %d 路由 · %s", s.Routes, health)),
-			chart.Dim.Render("文件  "+s.ConfigPath),
+			alignedField("状态", "● 运行中", innerW, styleOK),
+			alignedField("服务", sysText, innerW, chart.Dim),
+			alignedField("管理", s.AdminURL+" 可达", innerW, chart.Dim),
+			alignedField("路由", strconv.Itoa(s.Routes), innerW, chart.Dim),
+			alignedField("上游", upstream, innerW, chart.Dim),
+			alignedField("请求", strconv.Itoa(s.Requests), innerW, chart.Dim),
+			alignedField("文件", s.ConfigPath, innerW, chart.Dim),
 		)
 		at, reloadErr, reloading := m.monitor.CaddyReloadState()
 		switch {
@@ -635,9 +670,12 @@ func (m Model) caddyModalLines() []string {
 		}
 		body = append(body, "")
 		if reloading {
-			body = append(body, styleInfo.Render("[重载中…]"), buttonLine(innerW, "[配置文件]", "[关闭]"))
+			body = append(body, styleInfo.Render("[重载中…]"), buttonLine(innerW, []string{"[配置文件]"}, []string{"[关闭]"}))
 		} else {
-			body = append(body, buttonLine(innerW, "[刷新]", "[配置文件]", "[重载配置]", "[关闭]"))
+			body = append(body, buttonLine(innerW,
+				[]string{"[刷新]", "[配置文件]", "[重载配置]"},
+				[]string{"[关闭]"},
+			))
 		}
 	}
 	if len(body) > limit {
@@ -688,7 +726,7 @@ func (m Model) caddyConfigLines() []string {
 	for len(body) < limit-1 {
 		body = append(body, "")
 	}
-	body = append(body, buttonLine(innerW, "[刷新]", "[返回]", "[关闭]"))
+	body = append(body, buttonLine(innerW, []string{"[刷新]"}, []string{"[返回]", "[关闭]"}))
 	return m.modalFrame("Caddy 配置", "只读", body, m.caddyConfigWidth())
 }
 
@@ -893,6 +931,13 @@ func (m Model) caddyClick(msg tea.MouseClickMsg, r overlay.Rect) (Model, tea.Cmd
 		m.monitor = mm
 		return m, cmd
 	}
+	if tailHit(line, x, "文件") {
+		m.caddyMode = caddyConfig
+		m.caddyConfigScroll = 0
+		mm, cmd := m.monitor.LoadCaddyConfig()
+		m.monitor = mm
+		return m, cmd
+	}
 	return m, nil
 }
 
@@ -947,7 +992,182 @@ func (m Model) refreshVisibility() Model {
 	return m
 }
 
+// keyScroll 处理不显示提示的常用滚动/选择键。
+func (m Model) keyScroll(key string) Model {
+	if m.modal == modalDocker && m.dockerMode == dockerLogs {
+		switch key {
+		case "up":
+			return m.dockerScrollBy(-1)
+		case "down":
+			return m.dockerScrollBy(1)
+		case "pgup":
+			return m.dockerScrollBy(-10)
+		case "pgdown":
+			return m.dockerScrollBy(10)
+		case "home":
+			m.dockerLogScroll = 0
+		case "end":
+			m.dockerLogScroll = -1
+		}
+		return m
+	}
+	if m.modal == modalCaddy && m.caddyMode == caddyConfig {
+		switch key {
+		case "up":
+			return m.caddyConfigScrollBy(-1)
+		case "down":
+			return m.caddyConfigScrollBy(1)
+		case "pgup":
+			return m.caddyConfigScrollBy(-10)
+		case "pgdown":
+			return m.caddyConfigScrollBy(10)
+		case "home":
+			m.caddyConfigScroll = 0
+		case "end":
+			return m.caddyConfigScrollBy(1 << 20)
+		}
+		return m
+	}
+	if m.modal == modalDocker && m.dockerMode == dockerList {
+		n := len(m.monitor.DockerSnapshot().Containers)
+		if n == 0 {
+			return m
+		}
+		switch key {
+		case "up":
+			m.dockerSel = clamp(m.dockerSel-1, 0, n-1)
+		case "down":
+			m.dockerSel = clamp(m.dockerSel+1, 0, n-1)
+		case "pgup":
+			m.dockerSel = clamp(m.dockerSel-5, 0, n-1)
+		case "pgdown":
+			m.dockerSel = clamp(m.dockerSel+5, 0, n-1)
+		case "home":
+			m.dockerSel = 0
+		case "end":
+			m.dockerSel = n - 1
+		}
+		return m
+	}
+	if m.modal != modalNone {
+		page := max(m.modalMaxHeight()-2, 1)
+		switch key {
+		case "up":
+			m.modalScroll--
+		case "down":
+			m.modalScroll++
+		case "pgup":
+			m.modalScroll -= page
+		case "pgdown":
+			m.modalScroll += page
+		case "home":
+			m.modalScroll = 0
+		case "end":
+			m.modalScroll = m.maxModalScroll()
+		}
+		m.modalScroll = clamp(m.modalScroll, 0, m.maxModalScroll())
+		return m
+	}
+	if m.focusPanel != "" {
+		return m
+	}
+	page := max(m.viewHeight()-1, 1)
+	switch key {
+	case "up":
+		m.scroll--
+	case "down":
+		m.scroll++
+	case "pgup":
+		m.scroll -= page
+	case "pgdown":
+		m.scroll += page
+	case "home":
+		m.scroll = 0
+	case "end":
+		m.scroll = m.maxScroll()
+	}
+	m.scroll = clamp(m.scroll, 0, m.maxScroll())
+	return m
+}
+
+// keyRefresh 按当前视图刷新对应数据；主页面刷新全部可轮询数据。
+func (m Model) keyRefresh() (Model, tea.Cmd) {
+	switch {
+	case m.modal == modalDocker && m.dockerMode == dockerLogs:
+		if c, ok := m.dockerSelected(); ok {
+			mm, cmd := m.monitor.FetchDockerLogs(c.ID)
+			m.monitor = mm
+			return m, cmd
+		}
+		return m, nil
+	case m.modal == modalDocker:
+		mm, cmd := m.monitor.RefreshDockerNow()
+		m.monitor = mm
+		return m, cmd
+	case m.modal == modalCaddy && m.caddyMode == caddyConfig:
+		mm, cmd := m.monitor.LoadCaddyConfig()
+		m.monitor = mm
+		return m, cmd
+	case m.modal == modalCaddy:
+		mm, apiCmd := m.monitor.RefreshCaddyNow()
+		m.monitor = mm
+		mm, sysCmd := m.monitor.RefreshCaddySystemd()
+		m.monitor = mm
+		return m, batchCmds(apiCmd, sysCmd)
+	case m.modal != modalNone:
+		return m, nil
+	default:
+		var cmds []tea.Cmd
+		mm, cmd := m.monitor.Refresh(false)
+		m.monitor = mm
+		cmds = append(cmds, cmd)
+		mm, cmd = m.monitor.Refresh(true)
+		m.monitor = mm
+		cmds = append(cmds, cmd)
+		mm, cmd = m.monitor.RefreshDockerNow()
+		m.monitor = mm
+		cmds = append(cmds, cmd)
+		mm, cmd = m.monitor.RefreshCaddyNow()
+		m.monitor = mm
+		cmds = append(cmds, cmd)
+		return m, batchCmds(cmds...)
+	}
+}
+
+func batchCmds(cmds ...tea.Cmd) tea.Cmd {
+	out := make([]tea.Cmd, 0, len(cmds))
+	for _, cmd := range cmds {
+		if cmd != nil {
+			out = append(out, cmd)
+		}
+	}
+	switch len(out) {
+	case 0:
+		return nil
+	case 1:
+		return out[0]
+	default:
+		return tea.Batch(out...)
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Esc 和 Ctrl+C 是全局保留键，即使正在编辑输入框也生效。
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			if m.modal != modalNone {
+				return m.closeModal(), nil
+			}
+			if m.focusPanel != "" {
+				return m.clearFocus(), tea.ClearScreen
+			}
+			return m, tea.Quit
+		}
+	}
+
 	// 设置弹窗编辑态：所有按键只进输入框（q 也是文本；保存/取消用鼠标按钮）。
 	if m.modal == modalSettings && m.settings.Editing() {
 		if _, ok := msg.(tea.KeyPressMsg); ok {
@@ -1001,9 +1221,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		// 只保留 q 退出；其余操作全部用鼠标（用户 2026-10-20 要求）。
-		if msg.String() == "q" {
+		switch msg.String() {
+		case "q", "Q":
 			return m, tea.Quit
+		case "up", "down", "pgup", "pgdown", "home", "end":
+			return m.keyScroll(msg.String()), nil
+		case "r":
+			return m.keyRefresh()
+		}
+		if m.modal != modalNone {
+			return m, nil
+		}
+		switch msg.String() {
+		case "s":
+			return m.openSettings(), nil
+		case "d":
+			return m.openDocker()
+		case "c":
+			return m.openCaddy()
 		}
 		return m, nil
 

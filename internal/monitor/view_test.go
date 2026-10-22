@@ -439,6 +439,35 @@ func TestCPUStatsUseTwoEndedColumns(t *testing.T) {
 	}
 }
 
+func TestCPUCoreAndStatsColumnsAlign(t *testing.T) {
+	m := testModel(t, false, false)
+	cores, _ := m.coreColumnsSized(48, 4, 1)
+	if len(cores) == 0 {
+		t.Fatal("没有多核行")
+	}
+	coreLine := plain(cores[0])
+	if got := lipgloss.Width(coreLine); got != 48 {
+		t.Fatalf("多核行宽 = %d, want 48：%q", got, coreLine)
+	}
+	firstPct := strings.Index(coreLine, "%")
+	lastPct := strings.LastIndex(coreLine, "%")
+	if firstPct < 0 || lastPct < 0 {
+		t.Fatalf("多核行缺少百分比：%q", coreLine)
+	}
+	leftEnd := lipgloss.Width(coreLine[:firstPct+1])
+	rightEnd := lipgloss.Width(coreLine[:lastPct+1])
+
+	stats := plain(m.cpuStatsRows(48)[0])
+	tempEnd := strings.Index(stats, "41°C") + len("41°C")
+	loadEnd := strings.LastIndex(stats, "0.33") + len("0.33")
+	if got := lipgloss.Width(stats[:tempEnd]); got != leftEnd {
+		t.Errorf("温度值右边界 = %d，多核左列百分比右边界 = %d：%q", got, leftEnd, stats)
+	}
+	if got := lipgloss.Width(stats[:loadEnd]); got != rightEnd {
+		t.Errorf("负载值右边界 = %d，多核右列百分比右边界 = %d：%q", got, rightEnd, stats)
+	}
+}
+
 func TestDiskPanelUsesOneMeterAndTallerHistory(t *testing.T) {
 	m := testModel(t, false, false)
 	lines := m.diskPanel(50, 10)
@@ -544,7 +573,7 @@ func TestWideLayoutShowsServiceCards(t *testing.T) {
 		t.Fatalf("宽屏出了 %d 行, want 24", len(lines))
 	}
 	page := plainPage(lines)
-	for _, want := range []string{"CPU", "内存", "磁盘", "Docker", "Caddy", "网络", "2/2", "12 路由", "5/5"} {
+	for _, want := range []string{"CPU", "内存", "磁盘", "Docker", "Caddy", "网络", "2/2", "路由", "12", "5/5"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("宽屏少了 %q：\n%s", want, page)
 		}
@@ -882,7 +911,7 @@ func TestCaddyShortListKeepsOriginalColors(t *testing.T) {
 		m.caddySnap.Upstreams = append(m.caddySnap.Upstreams, caddy.Upstream{Address: fmt.Sprintf("app:%d", 3000+i)})
 	}
 
-	raw := strings.Join(m.caddyPanel(50, 9), "\n")
+	raw := strings.Join(m.caddyPanel(50, 12), "\n")
 	for i := 0; i < 4; i++ {
 		needle := fmt.Sprintf("domain-%02d.example", i+1)
 		line := rawLineContaining(raw, needle)
