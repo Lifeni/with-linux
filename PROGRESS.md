@@ -1105,4 +1105,5 @@ ok  	with-linux/internal/app	0.093s
 - monitor 测试：三种不同长度倒计时的右边界一致；内存与磁盘等宽；Swap 不显示百分比；AI 全关时网络仍占满左侧下栏。
 - `go test -count=1 ./...`：全量 13 个测试包通过；`gofmt`、`go mod tidy -diff`、`go vet`、`git diff --check` 干净；amd64/arm64 静态构建通过。
 - 120×30 实拍：内存可用/缓存与空闲/Swap 稳定两列，Swap 值不截断；左侧网络与右侧服务栏、Docker/Caddy 排版正常，`q` 退出。
-- 重新构建并安装 `with-linux 0.5.2~dev`：`/usr/bin/wl --version` → `wl 0.5.2~dev`，安装二进制与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `8eab85f6…`，`dpkg -V` 无差异。
+- 内存与磁盘恢复等宽，120 宽实测各 38 格；Swap 已去掉百分比，仅保留已用/总量。
+- 重新构建并安装 `with-linux 0.5.2~dev`：`/usr/bin/wl --version` → `wl 0.5.2~dev`，安装二进制与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `c8091703…`，`dpkg -V` 无差异。
