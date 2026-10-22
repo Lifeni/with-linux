@@ -49,6 +49,16 @@ func plainPage(lines []string) string {
 	return strings.Join(out, "\n")
 }
 
+func separatorAboveButton(lines []string, label string) bool {
+	for i, line := range lines {
+		if i == 0 || !strings.Contains(plain(line), label) {
+			continue
+		}
+		return strings.Count(plain(lines[i-1]), "─") >= 4
+	}
+	return false
+}
+
 func newTestModel() Model {
 	m := New(meta.Info{Version: "test", Date: "2026-10-20"})
 	m.width, m.height = 80, 24
@@ -495,6 +505,9 @@ func TestModalCentersAndDims(t *testing.T) {
 		t.Fatalf("弹窗打开后底层内容丢了")
 	}
 	r := m.modalRect()
+	if r.W > 72 {
+		t.Errorf("设置弹窗宽 = %d, want <=72", r.W)
+	}
 	if wantX := (m.width - r.W) / 2; r.X != wantX {
 		t.Errorf("弹窗 X = %d, want %d", r.X, wantX)
 	}
@@ -538,6 +551,9 @@ func TestSettingsModalFooterInsideFrame(t *testing.T) {
 		}
 		if footer >= len(lines)-1 {
 			t.Fatalf("%s 落在底边框之后：第 %d/%d 行", want, footer, len(lines))
+		}
+		if footer == 0 || strings.Count(plain(lines[footer-1]), "─") < 4 {
+			t.Fatalf("%s 上方缺少分隔线：%q", want, plain(lines[footer-1]))
 		}
 		if got := plain(lines[footer]); !strings.HasPrefix(got, "│") || !strings.HasSuffix(got, "│") {
 			for i, line := range lines {
@@ -904,6 +920,9 @@ func TestDockerModalButtonsAndLogs(t *testing.T) {
 			t.Fatalf("Docker 弹窗缺少 %q：\n%s", want, page)
 		}
 	}
+	if !separatorAboveButton(m.modalWindow(), "[关闭]") {
+		t.Fatal("Docker 按钮上方缺少分隔线")
+	}
 
 	nm, _ = clickModalLine(t, m, "api", 10)
 	m = nm
@@ -973,6 +992,9 @@ func TestCaddyModalButtons(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Fatalf("Caddy 弹窗缺少 %q：\n%s", want, page)
 		}
+	}
+	if !separatorAboveButton(m.modalWindow(), "[关闭]") {
+		t.Fatal("Caddy 按钮上方缺少分隔线")
 	}
 
 	nm, cmd = clickModalLine(t, m, "文件 ", 20)

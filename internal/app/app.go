@@ -171,12 +171,17 @@ func (m Model) modalMaxHeight() int {
 	return max(h, 1)
 }
 
+func (m Model) settingsModalWidth() int {
+	return min(m.modalMaxWidth(), 72)
+}
+
 // modalContent 是完整弹窗内容（不含遮罩）。目前只有设置弹窗；
 // Docker/Caddy 在后续步骤接入同一套居中覆盖。
 func (m Model) modalContent() []string {
 	switch m.modal {
 	case modalSettings:
-		w := max(m.modalMaxWidth()-10, 1)
+		width := m.settingsModalWidth()
+		w := max(width-10, 1)
 		var footer []string
 		if text, sev := m.settings.StatusText(); text != "" {
 			st := styleInfo
@@ -188,12 +193,13 @@ func (m Model) modalContent() []string {
 			}
 			footer = append(footer, chart.ClampTo(st.Render(text), w))
 		}
+		footer = append(footer, chart.Dim.Render(strings.Repeat("─", w)))
 		if m.settings.Editing() {
 			footer = append(footer, buttonLine(w, []string{"[保存]"}, []string{"[取消]"}))
 		} else {
 			footer = append(footer, buttonLine(w, nil, []string{"[关闭]"}))
 		}
-		return m.settings.ModalLines(m.modalMaxWidth(), footer...)
+		return m.settings.ModalLines(width, footer...)
 	case modalDocker:
 		return m.dockerModalLines()
 	case modalCaddy:
@@ -361,11 +367,15 @@ func (m Model) dockerListBody(limit int) []string {
 	s := m.monitor.DockerSnapshot()
 	body := make([]string, 0, limit)
 	if !m.monitor.DockerLoaded() {
-		body = append(body, chart.Dim.Render("首次查询中…"), "", buttonLine(m.dockerModalWidth()-4, []string{"[刷新]"}, []string{"[关闭]"}))
+		w := m.dockerModalWidth() - 4
+		body = append(body, chart.Dim.Render("首次查询中…"), "", chart.Dim.Render(strings.Repeat("─", w)),
+			buttonLine(w, []string{"[刷新]"}, []string{"[关闭]"}))
 		return body
 	}
 	if s.Err != nil {
-		body = append(body, chart.Red.Render("Docker 不可达"), chart.Dim.Render(shortErrorText(s.Err)), "", buttonLine(m.dockerModalWidth()-4, []string{"[刷新]"}, []string{"[关闭]"}))
+		w := m.dockerModalWidth() - 4
+		body = append(body, chart.Red.Render("Docker 不可达"), chart.Dim.Render(shortErrorText(s.Err)), "",
+			chart.Dim.Render(strings.Repeat("─", w)), buttonLine(w, []string{"[刷新]"}, []string{"[关闭]"}))
 		return body
 	}
 	summary := chart.FitFields([]string{
@@ -375,7 +385,9 @@ func (m Model) dockerListBody(limit int) []string {
 	}, " · ", m.dockerModalWidth()-4)
 	body = append(body, summary)
 	if len(s.Containers) == 0 {
-		body = append(body, chart.Dim.Render("没有容器"), "", buttonLine(m.dockerModalWidth()-4, []string{"[刷新]"}, []string{"[关闭]"}))
+		w := m.dockerModalWidth() - 4
+		body = append(body, chart.Dim.Render("没有容器"), "", chart.Dim.Render(strings.Repeat("─", w)),
+			buttonLine(w, []string{"[刷新]"}, []string{"[关闭]"}))
 		return body
 	}
 
@@ -391,7 +403,7 @@ func (m Model) dockerListBody(limit int) []string {
 		feedback = style.Render(chart.ClampTo(text, innerW))
 	}
 	detail := m.dockerDetailLines(s.Containers[sel], innerW)
-	fixed := 2 /*summary+header*/ + 1 /*blank*/ + len(detail) + 1 /*footer*/
+	fixed := 2 /*summary+header*/ + 1 /*blank*/ + len(detail) + 2 /*separator+footer*/
 	if feedback != "" {
 		fixed++
 	}
@@ -413,7 +425,7 @@ func (m Model) dockerListBody(limit int) []string {
 	if c, ok := m.dockerSelected(); ok && !c.Running {
 		action = "启动"
 	}
-	body = append(body, buttonLine(innerW,
+	body = append(body, chart.Dim.Render(strings.Repeat("─", innerW)), buttonLine(innerW,
 		[]string{"[" + action + "]", "[重启]", "[日志]"},
 		[]string{"[刷新]", "[关闭]"},
 	))
@@ -581,7 +593,7 @@ func (m Model) dockerLogsBody(limit int) []string {
 		chart.Text.Render(chart.ClampTo(header, innerW)),
 		chart.Dim.Render(chart.ClampTo(filterLine, innerW)),
 	}
-	rows := max(limit-3, 1)
+	rows := max(limit-4, 1)
 	if state.Loading {
 		body = append(body, chart.Dim.Render("读取中…"))
 	} else if state.Err != nil {
@@ -598,9 +610,10 @@ func (m Model) dockerLogsBody(limit int) []string {
 		}
 	}
 	if m.dockerFiltering {
-		body = append(body, buttonLine(innerW, []string{"[应用]"}, []string{"[取消]"}))
+		body = append(body, chart.Dim.Render(strings.Repeat("─", innerW)),
+			buttonLine(innerW, []string{"[应用]"}, []string{"[取消]"}))
 	} else {
-		body = append(body, buttonLine(innerW,
+		body = append(body, chart.Dim.Render(strings.Repeat("─", innerW)), buttonLine(innerW,
 			[]string{"[刷新]", "[过滤]"},
 			[]string{"[返回]", "[关闭]"},
 		))
@@ -628,13 +641,15 @@ func (m Model) caddyModalLines() []string {
 	}
 	body := make([]string, 0, limit)
 	if !m.monitor.CaddyLoaded() {
-		body = append(body, chart.Dim.Render("首次查询中…"), "", buttonLine(innerW, []string{"[刷新]", "[配置文件]"}, []string{"[关闭]"}))
+		body = append(body, chart.Dim.Render("首次查询中…"), "", chart.Dim.Render(strings.Repeat("─", innerW)),
+			buttonLine(innerW, []string{"[刷新]", "[配置文件]"}, []string{"[关闭]"}))
 	} else if !s.Reachable {
 		body = append(body, chart.Red.Render("管理 API 不可达"))
 		if s.Err != nil {
 			body = append(body, chart.Dim.Render(chart.ClampTo(shortErrorText(s.Err), m.modalMaxWidth()-6)))
 		}
-		body = append(body, chart.Dim.Render("systemctl status caddy"), "", buttonLine(innerW, []string{"[刷新]", "[配置文件]"}, []string{"[关闭]"}))
+		body = append(body, chart.Dim.Render("systemctl status caddy"), "", chart.Dim.Render(strings.Repeat("─", innerW)),
+			buttonLine(innerW, []string{"[刷新]", "[配置文件]"}, []string{"[关闭]"}))
 	} else {
 		sysText := "systemd [--]"
 		sys, sysErr, loaded, loading := m.monitor.CaddySystemdState()
@@ -670,9 +685,10 @@ func (m Model) caddyModalLines() []string {
 		}
 		body = append(body, "")
 		if reloading {
-			body = append(body, styleInfo.Render("[重载中…]"), buttonLine(innerW, []string{"[配置文件]"}, []string{"[关闭]"}))
+			body = append(body, styleInfo.Render("[重载中…]"), chart.Dim.Render(strings.Repeat("─", innerW)),
+				buttonLine(innerW, []string{"[配置文件]"}, []string{"[关闭]"}))
 		} else {
-			body = append(body, buttonLine(innerW,
+			body = append(body, chart.Dim.Render(strings.Repeat("─", innerW)), buttonLine(innerW,
 				[]string{"[刷新]", "[配置文件]", "[重载配置]"},
 				[]string{"[关闭]"},
 			))
@@ -689,7 +705,7 @@ func (m Model) caddyConfigWidth() int {
 }
 
 func (m Model) caddyConfigViewRows(limit int) int {
-	return max(limit-3, 1)
+	return max(limit-4, 1)
 }
 
 func (m Model) caddyConfigLines() []string {
@@ -723,10 +739,11 @@ func (m Model) caddyConfigLines() []string {
 			body = append(body, chart.Dim.Render(prefix)+chart.Text.Render(chart.ClampTo(cfg.Lines[i], avail)))
 		}
 	}
-	for len(body) < limit-1 {
+	for len(body) < limit-2 {
 		body = append(body, "")
 	}
-	body = append(body, buttonLine(innerW, []string{"[刷新]"}, []string{"[返回]", "[关闭]"}))
+	body = append(body, chart.Dim.Render(strings.Repeat("─", innerW)),
+		buttonLine(innerW, []string{"[刷新]"}, []string{"[返回]", "[关闭]"}))
 	return m.modalFrame("Caddy 配置", "只读", body, m.caddyConfigWidth())
 }
 

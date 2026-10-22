@@ -324,7 +324,7 @@ func dockerListRows(innerH int) int {
 }
 
 func caddyListRows(innerH int) int {
-	return max(innerH-2, 0)
+	return max(innerH-1, 0)
 }
 
 func (m Model) dockerSummary(width int) string {
@@ -1549,7 +1549,7 @@ func (m Model) caddyPanel(w, h int) []string {
 		{label: "路由", value: strconv.Itoa(s.Routes), style: chart.SeriesCyan},
 		{label: "上游", value: healthValue, style: healthStyle},
 		{label: "请求", value: strconv.Itoa(s.Requests), style: chart.Dim},
-	}, innerW, 2)
+	}, innerW, 4)
 	body := make([]string, 0, max(len(s.Domains), len(s.Upstreams))+3)
 	rows := max(len(s.Domains), len(s.Upstreams))
 	for i := 0; i < rows; i++ {
