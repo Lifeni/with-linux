@@ -183,6 +183,9 @@ func TestWideLayoutKeepsNetworkWideAndAIInRail(t *testing.T) {
 	if netRect.W < WideLayoutWidth*3/5-2 {
 		t.Errorf("网络宽度 = %d，应当吃满左侧下排", netRect.W)
 	}
+	if memRect.W < 42 {
+		t.Errorf("内存宽度 = %d，应至少 42 格以保证两列明细", memRect.W)
+	}
 	if aiRect.X < netRect.X+netRect.W {
 		t.Errorf("AI 面板 X = %d，应当落在右侧服务栏（网络右边界 %d 之后）", aiRect.X, netRect.X+netRect.W)
 	}
@@ -259,6 +262,24 @@ func TestUsagePanelWindowsAndDegradation(t *testing.T) {
 	for _, l := range strings.Split(full, "\n") {
 		if got := lipgloss.Width(l); got != 48 {
 			t.Errorf("面板行宽 %d, want 48（%q）", got, l)
+		}
+	}
+	countdownEnds := make(map[string]int)
+	for _, line := range m.usagePanel(p, 48, 5) {
+		text := plain(line)
+		for _, cd := range []string{"3h11m", "2d7h", "11d3h"} {
+			if idx := strings.Index(text, cd); idx >= 0 {
+				countdownEnds[cd] = lipgloss.Width(text[:idx+len(cd)])
+			}
+		}
+	}
+	if len(countdownEnds) != 3 {
+		t.Fatalf("没有找到全部倒计时列：%v", countdownEnds)
+	}
+	wantEnd := countdownEnds["3h11m"]
+	for cd, end := range countdownEnds {
+		if end != wantEnd {
+			t.Errorf("倒计时 %s 的右边界 = %d, want %d（%v）", cd, end, wantEnd, countdownEnds)
 		}
 	}
 
@@ -577,7 +598,7 @@ func TestWideNetworkSpansBottomWhenAINone(t *testing.T) {
 			netW = p.Rect.W
 		}
 	}
-	wantNetW := (WideLayoutWidth - grid.ColGap) * 3 / 5
+	wantNetW := max((WideLayoutWidth-grid.ColGap)*3/5, 76)
 	if netW != wantNetW {
 		t.Errorf("AI 全关时网络宽 = %d, want %d（占满左侧栏；右侧是服务栏）", netW, wantNetW)
 	}

@@ -511,6 +511,28 @@ func TestSettingsModalFooterInsideFrame(t *testing.T) {
 	}
 }
 
+func TestButtonLineSpreadsEndToEnd(t *testing.T) {
+	for _, tc := range []struct {
+		width  int
+		labels []string
+	}{
+		{40, []string{"[保存]", "[取消]"}},
+		{78, []string{"[停止]", "[重启]", "[日志]", "[刷新]", "[关闭]"}},
+	} {
+		line := plain(buttonLine(tc.width, tc.labels...))
+		if got := lipgloss.Width(line); got != tc.width {
+			t.Errorf("按钮行宽 = %d, want %d：%q", got, tc.width, line)
+		}
+		if !strings.HasPrefix(line, tc.labels[0]) {
+			t.Errorf("首个按钮没有贴左：%q", line)
+		}
+		last := tc.labels[len(tc.labels)-1]
+		if !strings.HasSuffix(line, last) {
+			t.Errorf("末个按钮没有贴右：%q", line)
+		}
+	}
+}
+
 func TestSettingsModalWheelScroll(t *testing.T) {
 	m := enterSettings(t, newTestModel())
 	m.height = 8

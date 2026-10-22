@@ -136,8 +136,14 @@ func (m Model) tree(width int) grid.Node {
 
 	if width >= WideLayoutWidth {
 		// 网络吃满左侧下排；AI 固定右侧服务栏顶部，Docker/Caddy 在下方。
+		leftWidth := max(width*3/5, 76)
+		memWeight, diskWeight := 1, 1
+		if leftWidth/2 < 42 {
+			memWeight = 42
+			diskWeight = max(leftWidth-42, 1)
+		}
 		left := grid.Col(
-			grid.Row(grid.Leaf(panelMem), grid.Leaf(panelDisk)),
+			grid.Row(grid.Leaf(panelMem).WithWidth(memWeight), grid.Leaf(panelDisk).WithWidth(diskWeight)),
 			grid.Row(grid.Leaf(panelNet)),
 		)
 		rightChildren := make([]grid.Node, 0, 3)
@@ -146,7 +152,9 @@ func (m Model) tree(width int) grid.Node {
 		}
 		rightChildren = append(rightChildren, grid.Leaf(panelDocker), grid.Leaf(panelCaddy))
 		right := grid.Col(rightChildren...)
-		lower := grid.Row(left.WithWidth(3), right.WithWidth(2))
+		// 内存的两列明细需要约 38 格内宽。正常按 3:2 分栏；不足时向右侧
+		// AI/Docker/Caddy 服务栏借少量宽度，保证内存至少 42 格外宽。
+		lower := grid.Row(left.WithWidth(leftWidth), right.WithWidth(width-leftWidth))
 		return grid.Col(grid.Leaf(panelCPUWide).WithWeight(3), lower.WithWeight(7))
 	}
 
@@ -1651,23 +1659,23 @@ func (m Model) usagePanel(p providerSnapshot, w, h int) []string {
 	showCountdown := true
 	numsW := pctW + 1 + cdW
 	meterW := innerW - labelW - numsW - 2
-	if meterW < 4 { // 宽度不够先丢倒计时
+	if meterW < 1 { // 宽度不够才丢倒计时，宁可压缩计量条也优先保留右对齐时间
 		showCountdown = false
 		numsW = pctW
 		meterW = innerW - labelW - numsW - 2
 	}
-	meterW = max(meterW, 4)
+	meterW = max(meterW, 1)
 
 	lines := make([]string, 0, len(p.windows))
 	for i, win := range p.windows {
 		if !win.hasData {
 			lines = append(lines, chart.Text.Render(chart.PadTo(win.label, labelW))+" "+
-				strings.Repeat(" ", meterW)+" "+chart.Dim.Render("[--]"))
+				strings.Repeat(" ", meterW)+" "+chart.Dim.Render(fmt.Sprintf("%*s", max(pctW, cdW), "[--]")))
 			continue
 		}
 		nums := chart.PctStyle(win.percent).Render(fmt.Sprintf("%*s", pctW, pcts[i]))
 		if showCountdown {
-			nums += " " + chart.Dim.Render(fmt.Sprintf("%-*s", cdW, cds[i]))
+			nums += " " + chart.Dim.Render(fmt.Sprintf("%*s", cdW, cds[i]))
 		}
 		lines = append(lines, chart.Text.Render(chart.PadTo(win.label, labelW))+" "+
 			chart.MeterH(win.percent, meterW, chart.PctStyle(win.percent))+" "+nums)

@@ -1090,3 +1090,18 @@ ok  	with-linux/internal/app	0.093s
 - `CGO_ENABLED=0` 的 linux/amd64 与 linux/arm64 静态构建通过。
 - 120×30 临时构建实拍：CPU 温度/负载、内存容量/百分比、磁盘可用/inode、Docker 总量均已对齐；内存较长 Swap 值自动降为整行，不再截断百分比；`q` 正常退出。
 - 构建并安装 `with-linux 0.5.2~dev` ARM64 包供用户实测：`/usr/bin/wl --version` → `wl 0.5.2~dev`，安装二进制与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `b4b31b9e…`，`dpkg -V with-linux` 无差异。
+
+## 2026-10-22 · M34：弹窗按钮、AI 时间与内存借宽
+
+### 实现
+
+- `buttonLine` 接收弹窗内宽：多按钮行首按钮贴左、末按钮贴右，中间空间等距分配；设置、Docker、日志、Caddy 全部接入。
+- AI 用量倒计时从 `%-*s` 左对齐改为 `%*s` 右对齐；保留时间列的最低计量条宽度从 4 格降到 1 格，空间紧张时优先显示时间。
+- 宽屏默认左右约 3:2；内存不足两列宽度时左栏从右侧 AI/Docker/Caddy 服务栏借少量宽度，并允许内存/磁盘采用不等宽权重。120 宽下内存 42 格、磁盘 34 格、右栏 44 格。
+
+### 验证
+
+- app 测试：双按钮 40 宽和五按钮 78 宽均首尾贴边、总宽准确。
+- monitor 测试：三种不同长度倒计时的右边界一致；120 宽内存至少 42 格；AI 全关时网络仍占满左侧下栏。
+- `go test -count=1 ./...`：全量 13 个测试包通过；`gofmt`、`go mod tidy -diff`、`go vet`、`git diff --check` 干净；amd64/arm64 静态构建通过。
+- 120×30 实拍：内存可用/缓存与空闲/Swap 稳定两列，Swap 值不截断；左侧网络与右侧服务栏、Docker/Caddy 排版正常，`q` 退出。
