@@ -739,6 +739,27 @@ func TestDockerPanelScrollsContainerList(t *testing.T) {
 	}
 }
 
+func TestDockerListFadesAtBothEdges(t *testing.T) {
+	m := testModel(t, false, false)
+	m.dockerLoaded = true
+	for i := 1; i <= 4; i++ {
+		m.dockerSnap.Containers = append(m.dockerSnap.Containers, docker.Container{
+			ID: fmt.Sprintf("c%d", i), Name: fmt.Sprintf("svc-%02d", i),
+			State: "running", Running: true, HasStats: true,
+		})
+	}
+	m.dockerSnap.Running = len(m.dockerSnap.Containers)
+	m.dockerSnap.Total = len(m.dockerSnap.Containers)
+
+	raw := strings.Join(m.dockerPanel(50, 12), "\n")
+	for i, color := range []string{"237", "246", "246", "237"} {
+		line := rawLineContaining(raw, fmt.Sprintf("svc-%02d", i+1))
+		if !strings.Contains(line, "38;5;"+color) {
+			t.Errorf("Docker 顶部视口第 %d 行应为双端渐隐色 %s：%q", i, color, line)
+		}
+	}
+}
+
 func TestCaddyPanelScrollsDomainRows(t *testing.T) {
 	m := testModel(t, false, false)
 	m.caddyLoaded = true
@@ -766,6 +787,43 @@ func TestCaddyPanelScrollsDomainRows(t *testing.T) {
 		!strings.Contains(end, "文件 /tmp/Caddyfile") {
 		t.Fatalf("Caddy 列表末端应显示 API 与配置文件：\n%s", end)
 	}
+}
+
+func TestCaddyListFadesAtBothEdges(t *testing.T) {
+	m := testModel(t, false, false)
+	m.caddyLoaded = true
+	m.caddySnap = caddy.Snapshot{
+		Reachable: true, AdminURL: "http://127.0.0.1:2019", ConfigPath: "/tmp/Caddyfile",
+	}
+	for i := 1; i <= 4; i++ {
+		m.caddySnap.Domains = append(m.caddySnap.Domains, fmt.Sprintf("domain-%02d.example", i))
+		m.caddySnap.Upstreams = append(m.caddySnap.Upstreams, caddy.Upstream{Address: fmt.Sprintf("app:%d", 3000+i)})
+	}
+
+	raw := strings.Join(m.caddyPanel(50, 9), "\n")
+	for i, color := range []string{"237", "246", "252", "252", "246", "237"} {
+		needle := fmt.Sprintf("domain-%02d.example", i+1)
+		if i >= 4 {
+			if i == 4 {
+				needle = "API http://127.0.0.1:2019"
+			} else {
+				needle = "文件 /tmp/Caddyfile"
+			}
+		}
+		line := rawLineContaining(raw, needle)
+		if !strings.Contains(line, "38;5;"+color) {
+			t.Errorf("Caddy 顶部视口第 %d 行应为双端渐隐色 %s：%q", i, color, line)
+		}
+	}
+}
+
+func rawLineContaining(page, needle string) string {
+	for _, line := range strings.Split(page, "\n") {
+		if strings.Contains(plain(line), needle) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestScrollPanelClampsAndMoves(t *testing.T) {

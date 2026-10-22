@@ -1371,9 +1371,7 @@ func (m Model) dockerPanel(w, h int) []string {
 	start := max(min(m.dockerScroll, max(len(body)-rows, 0)), 0)
 	end := min(start+rows, len(body))
 	visible := append([]string(nil), body[start:end]...)
-	if end < len(body) {
-		visible = chart.FadeRows(visible)
-	}
+	visible = chart.FadeRows(visible)
 	lines = append(lines, visible...)
 	lines = finishPanel(lines, innerW, innerH, "")
 	return framed("Docker", fmt.Sprintf("%d/%d", s.Running, s.Total), lines, w, h)
@@ -1457,9 +1455,7 @@ func (m Model) caddyPanel(w, h int) []string {
 	start := max(min(m.caddyScroll, max(len(body)-visibleRows, 0)), 0)
 	end := min(start+visibleRows, len(body))
 	visible := append([]string(nil), body[start:end]...)
-	if end < len(body) {
-		visible = chart.FadeRows(visible)
-	}
+	visible = chart.FadeRows(visible)
 	lines = append(lines, visible...)
 	lines = finishPanel(lines, innerW, innerH, "")
 	return framed("Caddy", "运行中", lines, w, h)

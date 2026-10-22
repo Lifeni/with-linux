@@ -72,22 +72,36 @@ func TestFadeText(t *testing.T) {
 	}
 }
 
-func TestFadeRowsBottomUp(t *testing.T) {
+func TestFadeRowsAtBothEdges(t *testing.T) {
 	lines := []string{
 		Text.Render("first"),
 		Dim.Render("second"),
 		Green.Render("third"),
 		Red.Render("fourth"),
+		Text.Render("fifth"),
+		Dim.Render("sixth"),
 	}
 	got := FadeRows(lines)
-	for i, want := range []string{"first", "second", "third", "fourth"} {
+	for i, want := range []string{"first", "second", "third", "fourth", "fifth", "sixth"} {
 		if plain(got[i]) != want {
 			t.Errorf("第 %d 行可见文本 = %q, want %q", i, plain(got[i]), want)
 		}
 	}
-	for i, color := range []string{"255", "249", "243", "237"} {
+	for i, color := range []string{"237", "246", "252", "252", "246", "237"} {
 		if !strings.Contains(got[i], "38;5;"+color) {
-			t.Errorf("第 %d 行没有使用渐暗色 %s：%q", i, color, got[i])
+			t.Errorf("第 %d 行没有使用双端渐隐色 %s：%q", i, color, got[i])
 		}
+	}
+}
+
+func TestFadeRowsShortListIsSymmetricAndNonLinear(t *testing.T) {
+	got := FadeRows([]string{"one", "two", "three"})
+	for i, color := range []string{"237", "246", "237"} {
+		if !strings.Contains(got[i], "38;5;"+color) {
+			t.Errorf("三行列表第 %d 行没有使用 %s：%q", i, color, got[i])
+		}
+	}
+	if single := FadeRows([]string{"only"})[0]; !strings.Contains(single, "38;5;252") {
+		t.Errorf("单行列表应使用可读的中间灰阶：%q", single)
 	}
 }

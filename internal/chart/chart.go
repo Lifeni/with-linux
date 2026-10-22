@@ -7,7 +7,6 @@
 package chart
 
 import (
-	"math"
 	"regexp"
 	"strings"
 
@@ -126,19 +125,21 @@ func FadeText(s string, width int) string {
 	return stText.Render(head) + out
 }
 
-// FadeRows 把整组可见列表行按从上到下由 255→237 的灰阶逐行变淡。
-// 用于列表下方仍有隐藏内容时的提示；会移除原 SGR 样式，避免嵌套 ANSI reset
-// 把外层渐暗色覆盖掉。灰阶跨度刻意拉开，保证 16/256 色终端也能看出行间差异。
+// FadeRows 按离最近上下边界的行数给列表做对称灰阶渐隐：边界最暗(237)，
+// 向中间依次提亮到 255。矮列表因此也会自然形成上下过渡，而不是把整组行
+// 强行线性分摊到最暗；会移除原 SGR 样式，避免嵌套 ANSI reset 覆盖外层渐隐色。
 func FadeRows(lines []string) []string {
 	out := append([]string(nil), lines...)
 	if len(out) == 0 {
 		return out
 	}
-	colors := []string{"255", "252", "249", "246", "243", "240", "237"}
+	// 索引即离最近边界的行数。前几档刻意采用非线性步长，保证只有 3–5 行时
+	// 边界与相邻行仍有肉眼可辨的差异，中间行又不会过早变暗。
+	colors := []string{"237", "246", "252", "254", "255"}
 	for i := range out {
-		pos := 0
-		if len(out) > 1 {
-			pos = int(math.Round(float64(i) * float64(len(colors)-1) / float64(len(out)-1)))
+		pos := min(i, len(out)-1-i, len(colors)-1)
+		if len(out) == 1 {
+			pos = 2 // 单行同时贴近上下边界，取中间灰阶以保留可读性。
 		}
 		plain := sgrRE.ReplaceAllString(out[i], "")
 		out[i] = lipgloss.NewStyle().Foreground(lipgloss.Color(colors[pos])).Render(plain)
