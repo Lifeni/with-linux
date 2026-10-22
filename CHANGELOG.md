@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.6.0] - 2026-10-22
 
 ### Added
 
@@ -21,12 +21,11 @@
 
 - 章程明确 Docker 日志解析允许只读调用 `GET /containers/{id}/json`，且只读取 `Config.Tty`。
 - 宽屏右侧服务栏顺序改为 AI 用量、Docker、Caddy；AI 固定 5 行并位于 Docker 上方。
-- Docker/Caddy 卡内正文支持鼠标滚轮独立滚动；仍有隐藏内容时，底部最后三行按 245→242→238 逐级渐暗。
+- Docker/Caddy 卡内正文支持鼠标滚轮独立滚动；仍有隐藏内容时，整组可见行按 255→237 连续灰阶逐行渐暗。
 - 内存主面板精简为使用率历史图＋单个「已用」进度条，其他分类收成 1–2 行明细。
 - 磁盘主面板只保留根目录进度条，其他挂载点收成文字摘要；释放出的高度用于放大读写历史图。
 - CPU 放大态每核历史图由 1 行扩展为多行；网络放大态补充接口、IPv4、累计与错误/丢包明细。
 - 镜像填充图上传/下载基线之间保留 1 个点行间距；下载基线固定使用下载序列蓝色。
-- Docker/Caddy 卡内列表有隐藏内容时，整组可见行按 255→237 连续灰阶渐淡，避免只改最后三行时颜色差异不可见。
 
 ## [0.5.0] - 2026-10-21
 
@@ -147,6 +146,7 @@
 - 配置：`$XDG_CONFIG_HOME/with-linux/config.json`（默认 `~/.config/with-linux/config.json`），`apiKey` 字段
 - 交付：单一可执行文件，全静态交叉编译 `linux/amd64` ＋ `linux/arm64`
 
+[0.6.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.0
 [0.3.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.3.0
 [0.2.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.2.1
