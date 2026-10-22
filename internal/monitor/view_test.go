@@ -161,12 +161,14 @@ func TestWideLayoutKeepsNetworkWideAndAIInRail(t *testing.T) {
 	if pl == nil {
 		t.Fatal("宽屏布局没有解")
 	}
-	var memRect, netRect, aiRect, dockerRect, caddyRect grid.Rect
-	var haveMem, haveNet, haveAI, haveDocker, haveCaddy bool
+	var memRect, diskRect, netRect, aiRect, dockerRect, caddyRect grid.Rect
+	var haveMem, haveDisk, haveNet, haveAI, haveDocker, haveCaddy bool
 	for _, p := range pl {
 		switch p.Panel.ID {
 		case PanelMem:
 			memRect, haveMem = p.Rect, true
+		case PanelDisk:
+			diskRect, haveDisk = p.Rect, true
 		case PanelNet:
 			netRect, haveNet = p.Rect, true
 		case PanelOpenCode:
@@ -177,14 +179,14 @@ func TestWideLayoutKeepsNetworkWideAndAIInRail(t *testing.T) {
 			caddyRect, haveCaddy = p.Rect, true
 		}
 	}
-	if !haveMem || !haveNet || !haveAI || !haveDocker || !haveCaddy {
-		t.Fatal("宽屏布局缺少内存、网络、AI、Docker 或 Caddy")
+	if !haveMem || !haveDisk || !haveNet || !haveAI || !haveDocker || !haveCaddy {
+		t.Fatal("宽屏布局缺少内存、磁盘、网络、AI、Docker 或 Caddy")
 	}
 	if netRect.W < WideLayoutWidth*3/5-2 {
 		t.Errorf("网络宽度 = %d，应当吃满左侧下排", netRect.W)
 	}
-	if memRect.W < 42 {
-		t.Errorf("内存宽度 = %d，应至少 42 格以保证两列明细", memRect.W)
+	if memRect.W != diskRect.W {
+		t.Errorf("内存宽度 = %d，磁盘宽度 = %d，两者应一致", memRect.W, diskRect.W)
 	}
 	if aiRect.X < netRect.X+netRect.W {
 		t.Errorf("AI 面板 X = %d，应当落在右侧服务栏（网络右边界 %d 之后）", aiRect.X, netRect.X+netRect.W)
@@ -377,6 +379,16 @@ func TestMemoryPanelUsesOneMeterAndHistory(t *testing.T) {
 	}
 	if !strings.Contains(page, "可用") || !strings.Contains(page, "缓存") || !strings.Contains(page, "空闲") {
 		t.Errorf("内存主面板缺少精简分类：\n%s", page)
+	}
+	for _, line := range strings.Split(page, "\n") {
+		if strings.Contains(line, "Swap") {
+			if !strings.Contains(line, "1.0G/4.0G") {
+				t.Errorf("Swap 应显示已用/总量：%q", line)
+			}
+			if idx := strings.Index(line, "Swap"); strings.Contains(line[idx:], "%") {
+				t.Errorf("Swap 不应再显示百分比：%q", line)
+			}
+		}
 	}
 	hasBraille := false
 	for _, r := range page {

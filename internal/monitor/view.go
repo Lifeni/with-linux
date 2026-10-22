@@ -137,13 +137,8 @@ func (m Model) tree(width int) grid.Node {
 	if width >= WideLayoutWidth {
 		// 网络吃满左侧下排；AI 固定右侧服务栏顶部，Docker/Caddy 在下方。
 		leftWidth := max(width*3/5, 76)
-		memWeight, diskWeight := 1, 1
-		if leftWidth/2 < 42 {
-			memWeight = 42
-			diskWeight = max(leftWidth-42, 1)
-		}
 		left := grid.Col(
-			grid.Row(grid.Leaf(panelMem).WithWidth(memWeight), grid.Leaf(panelDisk).WithWidth(diskWeight)),
+			grid.Row(grid.Leaf(panelMem), grid.Leaf(panelDisk)),
 			grid.Row(grid.Leaf(panelNet)),
 		)
 		rightChildren := make([]grid.Node, 0, 3)
@@ -1056,7 +1051,7 @@ func (m Model) memPanel(w, h int) []string {
 	if mem.SwapOK {
 		secondary = append(secondary, metricCell{
 			label: "Swap",
-			value: chart.Bytes(float64(mem.SwapUsed)) + "/" + chart.Bytes(float64(mem.SwapTotal)) + " " + chart.Pct(mem.SwapPct()),
+			value: chart.Bytes(float64(mem.SwapUsed)) + "/" + chart.Bytes(float64(mem.SwapTotal)),
 			style: chart.Amber,
 		})
 	}
