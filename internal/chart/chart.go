@@ -7,6 +7,8 @@
 package chart
 
 import (
+	"math"
+	"regexp"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -41,6 +43,8 @@ var (
 	SeriesBlue = stBlue
 	SeriesCyan = stCyan
 )
+
+var sgrRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 // PctStyle 按百分比取色：>=85 红(174)、>=60 琥珀(179)、其余蓝(68)。
 func PctStyle(p float64) lipgloss.Style {
@@ -120,6 +124,26 @@ func FadeText(s string, width int) string {
 		out += stDim.Render(string(r[split+1]))
 	}
 	return stText.Render(head) + out
+}
+
+// FadeRows 把整组可见列表行按从上到下由 255→237 的灰阶逐行变淡。
+// 用于列表下方仍有隐藏内容时的提示；会移除原 SGR 样式，避免嵌套 ANSI reset
+// 把外层渐暗色覆盖掉。灰阶跨度刻意拉开，保证 16/256 色终端也能看出行间差异。
+func FadeRows(lines []string) []string {
+	out := append([]string(nil), lines...)
+	if len(out) == 0 {
+		return out
+	}
+	colors := []string{"255", "252", "249", "246", "243", "240", "237"}
+	for i := range out {
+		pos := 0
+		if len(out) > 1 {
+			pos = int(math.Round(float64(i) * float64(len(colors)-1) / float64(len(out)-1)))
+		}
+		plain := sgrRE.ReplaceAllString(out[i], "")
+		out[i] = lipgloss.NewStyle().Foreground(lipgloss.Color(colors[pos])).Render(plain)
+	}
+	return out
 }
 
 func max(a, b int) int {

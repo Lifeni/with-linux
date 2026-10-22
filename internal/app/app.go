@@ -1,4 +1,4 @@
-// Package app 是 with-linux 的 TUI 框架：标题栏（第 0 行）＋ 系统状态网格（中间内容区）＋ 底部状态提示。
+// Package app 是 with-linux 的 TUI 框架：标题栏（第 0 行）＋ 系统状态网格（其余行）。
 // 主页面始终是系统状态页；设置、Docker、Caddy 以弹窗覆盖在灰化背景上。
 // 布局、键位与鼠标行为见 AGENTS.md「界面布局」。
 //
@@ -397,6 +397,16 @@ func (m Model) dockerDetailLines(c docker.Container, innerW int) []string {
 		chart.Dim.Render(chart.ClampTo("ID "+shortID(c.ID)+" · 镜像 "+c.Image+" · "+c.Status, innerW)),
 	}
 	if c.HasStats {
+		cpu := "[--]"
+		if c.HasCPU {
+			cpu = chart.Pct(c.CPUPercent)
+		}
+		mem := chart.Bytes(float64(c.MemUsage)) + " / [--]"
+		if c.MemLimit > 0 {
+			mem = fmt.Sprintf("%s / %s (%s)",
+				chart.Bytes(float64(c.MemUsage)), chart.Bytes(float64(c.MemLimit)), chart.Pct(c.MemPercent))
+		}
+		lines = append(lines, chart.Dim.Render(chart.ClampTo("CPU "+cpu+" · 内存 "+mem, innerW)))
 		lines = append(lines, chart.Dim.Render(chart.ClampTo(fmt.Sprintf(
 			"网络 ↓%s ↑%s · 块 I/O 读%s 写%s · PIDs %d",
 			chart.Bytes(float64(c.NetRx)), chart.Bytes(float64(c.NetTx)),
@@ -756,9 +766,11 @@ func (m Model) caddyClick(msg tea.MouseClickMsg, r overlay.Rect) (Model, tea.Cmd
 		return m.closeModal(), nil
 	}
 	if buttonHit(line, x, "[刷新]") {
-		mm, cmd := m.monitor.RefreshCaddyNow()
+		mm, apiCmd := m.monitor.RefreshCaddyNow()
 		m.monitor = mm
-		return m, cmd
+		mm, systemdCmd := m.monitor.RefreshCaddySystemd()
+		m.monitor = mm
+		return m, tea.Batch(apiCmd, systemdCmd)
 	}
 	if buttonHit(line, x, "[重载配置]") && m.monitor.CaddySnapshot().Reachable {
 		mm, cmd := m.monitor.ReloadCaddy()
@@ -964,7 +976,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modalScroll = clamp(m.modalScroll, 0, m.maxModalScroll())
 			return m, nil
 		}
-		if msg.Y >= 1 && msg.Y <= m.height-2 {
+		if msg.Y >= 1 && msg.Y <= m.height-1 {
+			line := m.contentStart() + msg.Y - 1
+			if m.width >= monitor.WideLayoutWidth && m.focusPanel == "" {
+				switch id := m.monitor.HitPanel(msg.X, line, m.width, m.viewHeight()); id {
+				case monitor.PanelDocker, monitor.PanelCaddy:
+					delta := 0
+					switch msg.Button {
+					case tea.MouseWheelUp:
+						delta = -1
+					case tea.MouseWheelDown:
+						delta = 1
+					}
+					if delta != 0 {
+						m.monitor = m.monitor.ScrollPanel(id, delta, m.width, m.viewHeight())
+					}
+					return m, nil
+				}
+			}
 			switch msg.Button {
 			case tea.MouseWheelUp:
 				m.scroll--

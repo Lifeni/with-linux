@@ -15,7 +15,7 @@ import (
 type Config struct {
 	OpenCodeAPIKey    string `json:"openCodeApiKey"`
 	CommandCodeAPIKey string `json:"commandCodeApiKey"`
-	// ShowOpenCode / ShowCommandCode 控制两个用量页是否在顶栏展示。
+	// ShowOpenCode / ShowCommandCode 控制两个用量面板是否在系统状态页展示。
 	// 用指针区分「显式设置过」与「从未设置」：nil 表示从未设置，此时按对应 key 是否存在推导
 	// （填了 key 自动展示一次）；显式 true/false 尊重用户选择，不再自动打开。
 	ShowOpenCode    *bool `json:"showOpenCode"`

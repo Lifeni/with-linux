@@ -112,6 +112,48 @@ func TestHistorySkipsMissingMetrics(t *testing.T) {
 	}
 }
 
+func TestHistoricalPlotHeightsAreImmutable(t *testing.T) {
+	var h history
+	first := testSample()
+	first.Net[0].RxRate = 100 << 10
+	first.Net[0].TxRate = 50 << 10
+	first.Disk[0].ReadRate = 80 << 10
+	first.Disk[0].WriteRate = 40 << 10
+	h.push(first)
+
+	cpuBefore := h.cpu.all()[0]
+	coreBefore := h.coreMax.all()[0]
+	rxBefore, txBefore := h.rxPlot.all()[0], h.txPlot.all()[0]
+	readBefore, writeBefore := h.readPlot.all()[0], h.writePlot.all()[0]
+	netScaleBefore, diskScaleBefore := h.netScale, h.diskScale
+
+	second := testSample()
+	second.CPU.Total = 99
+	second.CPU.PerCore = []float64{99, 1, 2, 3, 4, 5, 6, 7}
+	second.Net[0].RxRate = 100 << 20
+	second.Net[0].TxRate = 80 << 20
+	second.Disk[0].ReadRate = 90 << 20
+	second.Disk[0].WriteRate = 70 << 20
+	h.push(second)
+
+	if h.cpu.all()[0] != cpuBefore || h.coreMax.all()[0] != coreBefore {
+		t.Fatalf("CPU 历史点被后续采样改写：cpu %v→%v coreMax %v→%v",
+			cpuBefore, h.cpu.all()[0], coreBefore, h.coreMax.all()[0])
+	}
+	if h.rxPlot.all()[0] != rxBefore || h.txPlot.all()[0] != txBefore {
+		t.Fatalf("网络历史高度被新量程改写：rx %v→%v tx %v→%v",
+			rxBefore, h.rxPlot.all()[0], txBefore, h.txPlot.all()[0])
+	}
+	if h.readPlot.all()[0] != readBefore || h.writePlot.all()[0] != writeBefore {
+		t.Fatalf("磁盘历史高度被新量程改写：read %v→%v write %v→%v",
+			readBefore, h.readPlot.all()[0], writeBefore, h.writePlot.all()[0])
+	}
+	if h.netScale <= netScaleBefore || h.diskScale <= diskScaleBefore {
+		t.Fatalf("新峰值应只抬高后续量程：net %v→%v disk %v→%v",
+			netScaleBefore, h.netScale, diskScaleBefore, h.diskScale)
+	}
+}
+
 func TestSampleOnceReadsProcAndPushesHistory(t *testing.T) {
 	m := Model{collector: sysstat.New(), now: time.Now()}
 	m.sampleOnce()

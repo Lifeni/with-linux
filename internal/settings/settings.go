@@ -22,7 +22,7 @@ type SavedMsg struct {
 	CommandCode bool
 }
 
-// TogglesChangedMsg 在勾选框切换后由 Update 产出，携带两页最新可见性；框架据此增删顶栏 tab。
+// TogglesChangedMsg 在勾选框切换后由 Update 产出，携带两个用量面板最新可见性；框架据此增删面板。
 type TogglesChangedMsg struct {
 	OpenCode    bool
 	CommandCode bool
@@ -128,8 +128,8 @@ func New(info meta.Info) Model {
 // Editing 报告是否处于编辑态：框架据此把全局键让给输入框。
 func (m Model) Editing() bool { return m.editing }
 
-// Visibility 报告两个用量页当前是否展示：显式开关优先，未显式设置时按对应 key 是否存在推导。
-// 框架据此决定顶栏要展示哪些 tab。
+// Visibility 报告两个用量面板当前是否展示：显式开关优先，未显式设置时按对应 key 是否存在推导。
+// 框架据此决定系统状态页要展示哪些用量面板。
 func (m Model) Visibility() (openCode, commandCode bool) {
 	return effectiveVisibility(m.showOC, m.key), effectiveVisibility(m.showCC, m.keyCC)
 }
@@ -142,7 +142,7 @@ func effectiveVisibility(explicit *bool, key string) bool {
 	return key != ""
 }
 
-// Reload 重读配置文件并退出编辑态（框架在切换标签时调用，避免编辑态跨标签残留）。
+// Reload 重读配置文件并退出编辑态（打开设置弹窗时调用，避免旧编辑状态残留）。
 func (m Model) Reload() Model {
 	m.editing = false
 	m.input.Blur()

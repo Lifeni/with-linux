@@ -178,16 +178,19 @@ func (c *Canvas) PlotFill(values []float64, slots int, min, max float64, series 
 // PlotFillMirror 以画布**垂直中线**为基线画两张填充面积图：up 从基线往上长、down 往下长
 // （btop 的网络图就是这种上下镜像）。maxUp/maxDown 分别是两侧的量程。
 //
-// 两条基线之间留 **1 个点行**的空隙：值为 0 时各自只画基线那一行，所以「读 0 / 写 0」
-// 看起来是两行分开的点，而不是粘在一起的一坨；有数值时才往上/往下填（用户 2026-10-12 要求）。
+// 两条基线之间保留 1 个点行的空隙：值为 0 时各自只画自己的基线，上传与下载不会糊成
+// 一条中心线。上基线使用上传色，下基线固定使用下载色（用户 2026-10-22 确认）。
 func (c *Canvas) PlotFillMirror(up, down []float64, slots int, maxUp, maxDown float64, seriesUp, seriesDown int) {
 	if c.h == 0 {
 		return
 	}
 	dotH := c.h * 4
 	mid := (dotH - 1) / 2
-	upBase := mid + 1 // 与下基线隔开 1 行
+	upBase := mid + 1
 	downBase := mid - 1
+	if upBase >= dotH {
+		upBase = dotH - 1
+	}
 	if downBase < 0 {
 		downBase = 0
 	}

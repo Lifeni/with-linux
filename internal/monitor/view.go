@@ -20,7 +20,6 @@ import (
 const (
 	netMinScale = 1024 // 网络 1 KiB/s
 	ioMinScale  = 1024 // 磁盘读写 1 KiB/s
-	maxMounts   = 5    // 磁盘面板最多列 5 个挂载点（sysstat 已把 / 排在第一）
 
 	// WideLayoutWidth 以上用 btop 式四栏上排 + 两栏下排；窄屏回退旧两栏 + 2 行服务条。
 	WideLayoutWidth = 120
@@ -126,7 +125,7 @@ func (m Model) Lines(width, height int) []string {
 }
 
 // tree 是系统状态页的布局树。
-// 宽 ≥120：CPU 整行；下半区上排内存/磁盘/Docker/Caddy 四等分，下排网络/AI 二等分。
+// 宽 ≥120：CPU 整行；下半区按 3:2 分栏，左侧内存/磁盘＋整行网络，右侧 AI/Docker/Caddy。
 // 窄屏：保持旧两栏；Docker/Caddy 只出现在底部摘要条里。
 func (m Model) tree(width int) grid.Node {
 	var usage []grid.Node
@@ -136,15 +135,16 @@ func (m Model) tree(width int) grid.Node {
 	usageRow := grid.Row(usage...)
 
 	if width >= WideLayoutWidth {
-		// 试用布局：网络吃满左侧下排，AI 用量移到右侧服务栏底部。
+		// 网络吃满左侧下排；AI 固定右侧服务栏顶部，Docker/Caddy 在下方。
 		left := grid.Col(
 			grid.Row(grid.Leaf(panelMem), grid.Leaf(panelDisk)),
 			grid.Row(grid.Leaf(panelNet)),
 		)
-		rightChildren := []grid.Node{grid.Leaf(panelDocker), grid.Leaf(panelCaddy)}
+		rightChildren := make([]grid.Node, 0, 3)
 		if len(usage) > 0 {
 			rightChildren = append(rightChildren, usageRow)
 		}
+		rightChildren = append(rightChildren, grid.Leaf(panelDocker), grid.Leaf(panelCaddy))
 		right := grid.Col(rightChildren...)
 		lower := grid.Row(left.WithWidth(3), right.WithWidth(2))
 		return grid.Col(grid.Leaf(panelCPUWide).WithWeight(3), lower.WithWeight(7))
@@ -252,6 +252,77 @@ func (m Model) HitService(x, y, width, height int) string {
 	return ""
 }
 
+func (m Model) panelRect(id string, width, height int) (grid.Rect, bool) {
+	if width < WideLayoutWidth || width <= 0 || height <= 0 {
+		return grid.Rect{}, false
+	}
+	for _, p := range grid.Solve(width, height, m.tree(width)) {
+		if p.Panel.ID == id {
+			return p.Rect, true
+		}
+	}
+	return grid.Rect{}, false
+}
+
+// ScrollPanel 只滚动宽屏 Docker/Caddy 卡内正文；delta>0 向下。页面的通用滚动由 app 处理。
+func (m Model) ScrollPanel(id string, delta, width, height int) Model {
+	r, ok := m.panelRect(id, width, height)
+	if !ok || delta == 0 {
+		return m
+	}
+	innerH := max(r.H-2, 0)
+	switch id {
+	case PanelDocker:
+		visible := dockerListRows(innerH)
+		maxScroll := max(m.dockerBodyCount()-visible, 0)
+		cur := max(min(m.dockerScroll, maxScroll), 0)
+		m.dockerScroll = max(min(cur+delta, maxScroll), 0)
+	case PanelCaddy:
+		visible := caddyListRows(innerH)
+		maxScroll := max(m.caddyBodyCount()-visible, 0)
+		cur := max(min(m.caddyScroll, maxScroll), 0)
+		m.caddyScroll = max(min(cur+delta, maxScroll), 0)
+	}
+	return m
+}
+
+func (m Model) dockerBodyCount() int {
+	if !m.dockerLoaded || m.dockerSnap.Err != nil {
+		return 0
+	}
+	n := len(m.dockerSnap.Containers)
+	if n == 0 {
+		n = 1 // “无容器”
+	}
+	if _, ok := m.dockerSnap.BusiestCPU(); ok {
+		n++
+	}
+	return n
+}
+
+func (m Model) caddyBodyCount() int {
+	if !m.caddyLoaded || !m.caddySnap.Reachable {
+		return 0
+	}
+	n := max(len(m.caddySnap.Domains), len(m.caddySnap.Upstreams))
+	if len(m.caddySnap.Domains) == 0 {
+		n++ // “未解析到域名”
+	}
+	return n + 2 // API 与配置文件
+}
+
+func dockerListRows(innerH int) int {
+	headerRows := 0
+	if innerH >= 10 {
+		headerRows = 1
+	}
+	return max(innerH-1-headerRows, 0)
+}
+
+func caddyListRows(innerH int) int {
+	return max(innerH-1, 0)
+}
+
 func (m Model) dockerSummary(width int) string {
 	title := chart.Title.Render("Docker")
 	if !m.dockerLoaded {
@@ -343,6 +414,12 @@ func (m Model) compose(width, height int, pl []grid.Placement) []string {
 
 // PanelLines 渲染单块面板，供框架做「点击放大」：宽高是整块内容区。
 func (m Model) PanelLines(id string, w, h int) []string {
+	switch id {
+	case PanelCPU:
+		return chart.ClampLines(m.cpuExpandedPanel(w, h), w)
+	case PanelNet:
+		return chart.ClampLines(m.netExpandedPanel(w, h), w)
+	}
 	return chart.ClampLines(m.renderPanel(id, w, h), w)
 }
 
@@ -587,7 +664,8 @@ func (m Model) cpuPanel(w, h int) []string {
 	// 高度够时把右栏包进「核心」子线框，和 btop 的多核区域一致。
 	if gw, dw, ok := splitColumns(innerW, 46, 20); ok {
 		// 历史曲线用固定颜色：不能因为当前占用跨过阈值就把过去两分钟整段换色。
-		graph := chart.FillMirror(padHist(m.hist.cpu.all()), padHist(m.hist.coreMax.all()), HistoryLen, gw, innerH,
+		slots := gw * 2
+		graph := chart.FillMirror(tailHist(m.hist.cpu.all(), slots), tailHist(m.hist.coreMax.all(), slots), slots, gw, innerH,
 			100, 100, chart.SeriesBlue, chart.SeriesCyan)
 		if innerH >= 8 && dw >= 24 {
 			detail := m.cpuDetailRows(dw-4, innerH-2)
@@ -620,7 +698,8 @@ func (m Model) cpuPanel(w, h int) []string {
 	}
 	lines := make([]string, 0, innerH)
 	if canvasH > 0 {
-		lines = append(lines, chart.FillMirror(padHist(m.hist.cpu.all()), padHist(m.hist.coreMax.all()), HistoryLen, innerW, canvasH,
+		slots := innerW * 2
+		lines = append(lines, chart.FillMirror(tailHist(m.hist.cpu.all(), slots), tailHist(m.hist.coreMax.all(), slots), slots, innerW, canvasH,
 			100, 100, chart.SeriesBlue, chart.SeriesCyan)...)
 	}
 	lines = append(lines, coreLines...)
@@ -631,6 +710,83 @@ func (m Model) cpuPanel(w, h int) []string {
 		lines = append(lines, stats)
 	}
 	return framed(title, value, lines, w, h)
+}
+
+// cpuExpandedPanel 给放大态更多细节：左图右核，右栏每核用多行历史图填满高度，
+// 不再把 8 个核的一行 sparkline 松散摊在整屏。
+func (m Model) cpuExpandedPanel(w, h int) []string {
+	innerW, innerH := innerSize(w, h)
+	cpu := m.sample.CPU
+	value := "[--]"
+	if cpu.HasFreq {
+		value = freqText(cpu.FreqMHz)
+	}
+	title := m.cpuTitle(value, w)
+	if (!cpu.HasData && len(cpu.PerCore) == 0) || innerW < 80 || innerH < 8 {
+		return m.cpuPanel(w, h)
+	}
+	detailNeed := max(innerW*2/5, 48)
+	gw, dw, ok := splitColumns(innerW, detailNeed, 36)
+	if !ok {
+		return m.cpuPanel(w, h)
+	}
+	slots := gw * 2
+	graph := chart.FillMirror(tailHist(m.hist.cpu.all(), slots), tailHist(m.hist.coreMax.all(), slots), slots, gw, innerH,
+		100, 100, chart.SeriesBlue, chart.SeriesCyan)
+	border, titleStyle := frameTheme("核心")
+	box := chart.FrameColored("核心", "", m.cpuExpandedDetailRows(dw-4, innerH-2), dw, innerH, border, titleStyle)
+	if box == nil {
+		return m.cpuPanel(w, h)
+	}
+	return framed(title, value, zipColumns(graph, box, gw, dw, innerH), w, h)
+}
+
+func (m Model) cpuExpandedDetailRows(width, height int) []string {
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+	cpu := m.sample.CPU
+	lines := make([]string, 0, height)
+	pct := cpu.Total
+	nums := chart.Pct(pct)
+	meterW := max(width-lipgloss.Width("用量 ")-lipgloss.Width(nums)-1, 4)
+	lines = append(lines,
+		chart.Text.Render("用量 ")+chart.MeterH(pct, meterW, chart.PctStyle(pct))+" "+chart.PctStyle(pct).Render(nums),
+	)
+	if cpu.HasData {
+		lines = append(lines, chart.Text.Render(chart.FitFields([]string{
+			"用户 " + chart.Pct(cpu.User),
+			"系统 " + chart.Pct(cpu.System),
+			"IO " + chart.Pct(cpu.IOwait),
+		}, " · ", width)))
+	}
+	stats := m.cpuStatsLine(width)
+	statsRows := 0
+	if stats != "" {
+		statsRows = 1
+	}
+	available := height - len(lines) - statsRows
+	if available < 4 {
+		return spreadRows(append(lines, stats), height)
+	}
+
+	perCol := (len(cpu.PerCore) + 1) / 2
+	graphH := max(available/max(perCol, 1), 1)
+	if len(cpu.PerCore)%2 != 0 {
+		perCol = (len(cpu.PerCore) + 1) / 2
+	}
+	coreLines, _ := m.coreColumnsSized(width, perCol, graphH)
+	if len(coreLines) > available {
+		coreLines = coreLines[:available]
+	}
+	lines = append(lines, coreLines...)
+	for len(lines) < height-statsRows {
+		lines = append(lines, "")
+	}
+	if stats != "" {
+		lines = append(lines, stats)
+	}
+	return finishPanel(lines, width, height, "")
 }
 
 // cpuDetailRows 是宽屏 CPU 面板右栏：用量条 ＋ 两列多核 ＋ 温度/负载。
@@ -692,10 +848,15 @@ func (m Model) cpuStatsLine(width int) string {
 // coreColumns 把每核排成两列（btop 风格：左列 C0–C3、右列 C4–C7），每核一条 1 行高的历史图。
 // 宽度太窄时退成一列；返回文本行与「因高度不够没显示的核数」。
 func (m Model) coreColumns(width, maxRows int) (lines []string, hidden int) {
+	return m.coreColumnsSized(width, maxRows, 1)
+}
+
+func (m Model) coreColumnsSized(width, maxRows, graphH int) (lines []string, hidden int) {
 	cores := m.sample.CPU.PerCore
 	if len(cores) == 0 || maxRows <= 0 {
 		return nil, 0
 	}
+	graphH = max(graphH, 1)
 	cols := 2
 	if width < 30 {
 		cols = 1
@@ -709,14 +870,14 @@ func (m Model) coreColumns(width, maxRows int) (lines []string, hidden int) {
 	graphW := max(colW-10, 4) // 「C0  」4 ＋ 空格 ＋ 空格 ＋ 「100%」4
 
 	for r := 0; r < rows; r++ {
-		var b strings.Builder
+		cells := make([][]string, cols)
 		for c := 0; c < cols; c++ {
-			if c > 0 {
-				b.WriteString("  ")
-			}
 			idx := c*perCol + r
 			if idx >= len(cores) {
-				b.WriteString(strings.Repeat(" ", colW))
+				cells[c] = make([]string, graphH)
+				for gy := range cells[c] {
+					cells[c][gy] = strings.Repeat(" ", colW)
+				}
 				continue
 			}
 			var hist []float64
@@ -728,11 +889,28 @@ func (m Model) coreColumns(width, maxRows int) (lines []string, hidden int) {
 			// 只取最近 slots 个样本；否则 120 个点塞进十几格，每秒只移动零点几个点列。
 			// 颜色固定，历史柱体不随当前值换色。
 			slots := max(graphW*2, 4)
-			g := chart.Fill(tailHist(hist, slots), slots, graphW, 1, 0, 100, chart.SeriesBlue)[0]
-			b.WriteString(chart.Text.Render(fmt.Sprintf("C%-2d", idx)) + " " + g + " " +
-				chart.PctStyle(v).Render(fmt.Sprintf("%3d%%", chart.PctValue(v))))
+			graph := chart.Fill(tailHist(hist, slots), slots, graphW, graphH, 0, 100, chart.SeriesBlue)
+			cells[c] = make([]string, graphH)
+			for gy := 0; gy < graphH; gy++ {
+				prefix := strings.Repeat(" ", 4)
+				suffix := strings.Repeat(" ", 5)
+				if gy == 0 {
+					prefix = chart.Text.Render(fmt.Sprintf("C%-2d", idx)) + " "
+					suffix = " " + chart.PctStyle(v).Render(fmt.Sprintf("%3d%%", chart.PctValue(v)))
+				}
+				cells[c][gy] = prefix + graph[gy] + suffix
+			}
 		}
-		lines = append(lines, b.String())
+		for gy := 0; gy < graphH; gy++ {
+			var b strings.Builder
+			for c := 0; c < cols; c++ {
+				if c > 0 {
+					b.WriteString("  ")
+				}
+				b.WriteString(cells[c][gy])
+			}
+			lines = append(lines, b.String())
+		}
 	}
 	if withNote {
 		lines = append(lines, chart.Dim.Render(chart.ClampTo(fmt.Sprintf("＋%d 核未显示", hidden), width)))
@@ -774,26 +952,51 @@ func (m Model) memPanel(w, h int) []string {
 		}
 		return float64(v) / float64(mem.Total) * 100
 	}
-	blocks := []statBlock{
-		{"已用", chart.Bytes(float64(mem.Used)) + " " + chart.Pct(pctOf(mem.Used)), pctOf(mem.Used), chart.PctStyle(pctOf(mem.Used))},
-		{"可用", chart.Bytes(float64(mem.Avail)) + " " + chart.Pct(pctOf(mem.Avail)), pctOf(mem.Avail), chart.SeriesBlue},
-		{"缓存", chart.Bytes(float64(mem.Cache)) + " " + chart.Pct(pctOf(mem.Cache)), pctOf(mem.Cache), chart.SeriesCyan},
-	}
-	if mem.Free > 0 {
-		blocks = append(blocks, statBlock{"空闲", chart.Bytes(float64(mem.Free)) + " " + chart.Pct(pctOf(mem.Free)), pctOf(mem.Free), chart.Green})
-	}
-	if mem.SwapOK {
-		blocks = append(blocks, statBlock{
-			"Swap", chart.Bytes(float64(mem.SwapUsed)) + "/" + chart.Bytes(float64(mem.SwapTotal)) + " " + chart.Pct(mem.SwapPct()),
-			mem.SwapPct(), chart.Amber,
-		})
-	}
-	extras := []string{"总计 " + chart.Bytes(float64(mem.Total))}
 	if innerH < 2 {
 		line := chart.FitFields([]string{chart.Title.Render("内存"), chart.Text.Render(value)}, " ", innerW)
 		return framed("内存", value, []string{line}, w, h)
 	}
-	lines := renderStatBlocks(blocks, innerW, innerH, extras)
+
+	used := statBlock{
+		label: "已用", value: chart.Bytes(float64(mem.Used)) + " " + chart.Pct(pctOf(mem.Used)),
+		pct: pctOf(mem.Used), style: chart.PctStyle(pctOf(mem.Used)),
+	}
+	summary := []string{
+		chart.SeriesBlue.Render("可用 " + chart.Bytes(float64(mem.Avail)) + " " + chart.Pct(pctOf(mem.Avail))),
+		chart.SeriesCyan.Render("缓存 " + chart.Bytes(float64(mem.Cache)) + " " + chart.Pct(pctOf(mem.Cache))),
+	}
+	details := []string{chart.FitFields(summary, " · ", innerW)}
+	secondary := make([]string, 0, 2)
+	if mem.Free > 0 {
+		secondary = append(secondary, chart.Green.Render("空闲 "+chart.Bytes(float64(mem.Free))+" "+chart.Pct(pctOf(mem.Free))))
+	}
+	if mem.SwapOK {
+		secondary = append(secondary, chart.Amber.Render(
+			"Swap "+chart.Bytes(float64(mem.SwapUsed))+"/"+chart.Bytes(float64(mem.SwapTotal))+" "+chart.Pct(mem.SwapPct()),
+		))
+	}
+	if len(secondary) > 0 {
+		details = append(details, chart.FitFields(secondary, " · ", innerW))
+	}
+
+	graphH := innerH - 2 - len(details)
+	if graphH < 2 {
+		graphH = 0
+	}
+	lines := make([]string, 0, innerH)
+	if graphH > 0 {
+		slots := innerW * 2
+		lines = append(lines, chart.Fill(tailHist(m.hist.mem.all(), slots), slots, innerW, graphH,
+			0, 100, chart.SeriesBlue)...)
+	}
+	lines = append(lines, statTitleLine(used, innerW), chart.MeterH(used.pct, innerW, used.style))
+	for _, line := range details {
+		if len(lines) >= innerH {
+			break
+		}
+		lines = append(lines, line)
+	}
+	lines = finishPanel(lines, innerW, innerH, "")
 	return framed("内存", value, lines, w, h)
 }
 
@@ -811,7 +1014,7 @@ func (m Model) netPanel(w, h int) []string {
 		}
 		return chart.Rate(v)
 	}
-	scale := max(chart.AutoMax(append(append([]float64{}, m.hist.rx.all()...), m.hist.tx.all()...)), netMinScale)
+	scale := max(m.hist.netScale, netMinScale)
 	pct := func(v float64) float64 {
 		if !n.HasRate || scale <= 0 {
 			return 0
@@ -830,8 +1033,9 @@ func (m Model) netPanel(w, h int) []string {
 
 	// 宽屏按 btop：左边是镜像曲线，右边是独立的「速率」子框。
 	if gw, dw, ok := splitColumns(innerW, 30, 24); ok && innerH >= 7 {
-		graph := chart.FillMirror(padHist(m.hist.tx.all()), padHist(m.hist.rx.all()), HistoryLen, gw, innerH,
-			scale, scale, chart.SeriesCyan, chart.SeriesBlue)
+		slots := gw * 2
+		graph := chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, gw, innerH,
+			100, 100, chart.SeriesCyan, chart.SeriesBlue)
 		if box := m.netStatsBox(dw, innerH); box != nil {
 			return framed(title, value, zipColumns(graph, box, gw, dw, innerH), w, h)
 		}
@@ -846,8 +1050,9 @@ func (m Model) netPanel(w, h int) []string {
 		graphH = innerH - 4
 	}
 	if graphH > 0 {
-		lines = append(lines, chart.FillMirror(padHist(m.hist.tx.all()), padHist(m.hist.rx.all()), HistoryLen, innerW, graphH,
-			scale, scale, chart.SeriesCyan, chart.SeriesBlue)...)
+		slots := innerW * 2
+		lines = append(lines, chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, innerW, graphH,
+			100, 100, chart.SeriesCyan, chart.SeriesBlue)...)
 	}
 	if len(lines) > 0 && len(lines)+4 < innerH {
 		lines = append(lines, chart.Dim.Render(strings.Repeat("─", innerW)))
@@ -887,7 +1092,7 @@ func (m Model) netStatsBox(w, h int) []string {
 		return nil
 	}
 	innerW, innerH := w-4, h-2
-	scale := max(chart.AutoMax(append(append([]float64{}, m.hist.rx.all()...), m.hist.tx.all()...)), netMinScale)
+	scale := max(m.hist.netScale, netMinScale)
 	pct := func(v float64) float64 {
 		if !n.HasRate || scale <= 0 {
 			return 0
@@ -916,8 +1121,73 @@ func (m Model) netStatsBox(w, h int) []string {
 	return chart.FrameColored("速率", "", lines, w, h, border, titleStyle)
 }
 
-// tailHist 取最近 n 个样本并在前面补 0。每核小图用它把历史窗口对齐到图宽，
-// 这样每秒采样恰好推进一个点列（半格），能看到明确的左移。
+// netExpandedPanel 在放大态扩大右侧明细，补齐接口、累计和错误/丢包，避免只有两个进度条。
+func (m Model) netExpandedPanel(w, h int) []string {
+	innerW, innerH := innerSize(w, h)
+	n := primaryNet(m.sample)
+	if n == nil || innerW < 80 || innerH < 8 {
+		return m.netPanel(w, h)
+	}
+	detailNeed := max(innerW/3, 34)
+	gw, dw, ok := splitColumns(innerW, detailNeed, 48)
+	if !ok {
+		return m.netPanel(w, h)
+	}
+	slots := gw * 2
+	graph := chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, gw, innerH,
+		100, 100, chart.SeriesCyan, chart.SeriesBlue)
+	box := m.netExpandedStatsBox(dw, innerH)
+	if box == nil {
+		return m.netPanel(w, h)
+	}
+	value := "↓" + chart.Rate(n.RxRate) + " ↑" + chart.Rate(n.TxRate)
+	if !n.HasRate {
+		value = "↓[--] ↑[--]"
+	}
+	title := "网络 " + n.Name
+	if n.IP != "" {
+		title += " " + n.IP
+	}
+	return framed(title, value, zipColumns(graph, box, gw, dw, innerH), w, h)
+}
+
+func (m Model) netExpandedStatsBox(w, h int) []string {
+	n := primaryNet(m.sample)
+	if n == nil || w < 12 || h < 4 {
+		return nil
+	}
+	innerW, innerH := w-4, h-2
+	scale := max(m.hist.netScale, netMinScale)
+	pct := func(v float64) float64 {
+		if !n.HasRate || scale <= 0 {
+			return 0
+		}
+		return v / scale * 100
+	}
+	rate := func(v float64) string {
+		if !n.HasRate {
+			return "[--]"
+		}
+		return chart.Rate(v)
+	}
+	blocks := []statBlock{
+		{"↓ 下载", rate(n.RxRate), pct(n.RxRate), chart.SeriesBlue},
+		{"↑ 上传", rate(n.TxRate), pct(n.TxRate), chart.SeriesCyan},
+	}
+	extras := []string{
+		chart.Dim.Render(chart.FitFields([]string{"接口 " + n.Name, "IPv4 " + n.IP}, " · ", innerW)),
+		chart.Dim.Render("累计 ↓ " + chart.Bytes(float64(n.RxTotal)) + " · ↑ " + chart.Bytes(float64(n.TxTotal))),
+		chart.Dim.Render(fmt.Sprintf("错误 ↓%d ↑%d · 丢包 ↓%d ↑%d",
+			n.RxErrors, n.TxErrors, n.RxDropped, n.TxDropped)),
+	}
+	lines := renderStatBlocks(blocks, innerW, innerH, extras)
+	border, titleStyle := frameTheme("网络")
+	return chart.FrameColored("速率", "", lines, w, h, border, titleStyle)
+}
+
+// tailHist 取最近 n 个样本并在前面补 0，返回恰好 n 个 slot。
+// 主图和每核小图都用它把历史对齐到点列宽度：一个采样恰好占一个 braille 点列，
+// 新样本并入时旧图整体左移一列，不会因插值步长变化被重新量化。
 func tailHist(v []float64, n int) []float64 {
 	if n <= 0 {
 		return nil
@@ -928,17 +1198,6 @@ func tailHist(v []float64, n int) []float64 {
 	} else {
 		copy(out[n-len(v):], v)
 	}
-	return out
-}
-
-// padHist 把还不够 2 分钟的短历史在前面补 0，让曲线从画布左缘开始铺满，
-// 不在左侧留一大块空白（新启动的 CPU/网络图尤其明显）。
-func padHist(v []float64) []float64 {
-	if len(v) == 0 || len(v) >= HistoryLen {
-		return v
-	}
-	out := make([]float64, HistoryLen)
-	copy(out[HistoryLen-len(v):], v)
 	return out
 }
 
@@ -959,67 +1218,95 @@ func (m Model) diskPanel(w, h int) []string {
 	if d == nil && len(mounts) == 0 {
 		return framed(title, "[--]", []string{chart.Dim.Render("[--]")}, w, h)
 	}
-	blocks := make([]statBlock, 0, len(mounts)+1)
-	for _, mt := range mounts {
-		b := statBlock{label: mt.Path, value: "[--]", style: chart.Dim}
-		if mt.HasData {
-			b.value = chart.Bytes(float64(mt.Used)) + "/" + chart.Bytes(float64(mt.Total)) + " " + chart.PctCeil(mt.UsePct)
-			b.pct = mt.UsePct
-			b.style = chart.PctStyle(mt.UsePct)
-		}
-		blocks = append(blocks, b)
-	}
-	extras := make([]string, 0, len(mounts)+3)
-	for _, mt := range mounts {
-		if mt.HasData {
-			line := mt.Path + " 可用 " + chart.Bytes(float64(mt.Avail))
-			if mt.HasInodes {
-				line += " · inode " + chart.Pct(mt.InodesPct)
-			}
-			extras = append(extras, line)
-		}
-	}
-	if d != nil {
-		if d.HasRate {
-			extras = append(extras, d.Device+" · 读 "+chart.Rate(d.ReadRate)+" 写 "+chart.Rate(d.WriteRate))
-		} else {
-			extras = append(extras, d.Device)
-		}
-	}
-	if len(mounts) > maxMounts {
-		extras = append(extras, fmt.Sprintf("+%d 个挂载点未显示", len(mounts)-maxMounts))
-	}
 	if innerH < 2 {
 		line := chart.FitFields([]string{chart.Title.Render("磁盘"), chart.Text.Render(value)}, " ", innerW)
-		if len(blocks) > 0 {
-			line = statTitleLine(blocks[0], innerW)
-		} else if len(extras) > 0 {
-			line = chart.Dim.Render(chart.ClampTo(extras[0], innerW))
+		if len(mounts) > 0 {
+			mt := mountByPath(mounts, "/")
+			b := mountBlock(mt)
+			line = statTitleLine(b, innerW)
+		} else if d != nil {
+			line = chart.Dim.Render(chart.ClampTo(d.Device, innerW))
 		}
 		return framed(title, value, []string{line}, w, h)
 	}
-	// 高度足够时在顶部加一条 btop 式读写历史曲线。120×30 的内高是 8：
-	// 用 2 行曲线但不加分隔线，仍能保留 3 个挂载点。更高的面板再给曲线加行和分隔线。
-	prefix := make([]string, 0, 5)
-	if innerH >= 8 {
-		graphH := 2
-		if innerH >= 12 {
-			graphH = 3
+
+	details := make([]string, 0, 2)
+	var root sysstat.Mount
+	if len(mounts) > 0 {
+		root = mountByPath(mounts, "/")
+		line := "可用 " + chart.Bytes(float64(root.Avail))
+		if root.HasInodes {
+			line += " · inode " + chart.Pct(root.InodesPct)
 		}
-		if innerH >= 16 {
-			graphH = 4
+		details = append(details, chart.Dim.Render(chart.ClampTo(line, innerW)))
+		others := make([]string, 0, 3)
+		for _, mt := range mounts {
+			if mt.Path == root.Path {
+				continue
+			}
+			label := mt.Path
+			if mt.HasData {
+				label += " " + chart.PctCeil(mt.UsePct)
+			}
+			others = append(others, chart.Dim.Render(label))
+			if len(others) == 3 {
+				break
+			}
 		}
-		scale := max(chart.AutoMax(append(append([]float64{}, m.hist.read.all()...), m.hist.write.all()...)), ioMinScale)
-		prefix = chart.FillMirror(padHist(m.hist.read.all()), padHist(m.hist.write.all()), HistoryLen, innerW, graphH,
-			scale, scale, chart.SeriesCyan, chart.SeriesBlue)
-		if innerH >= 12 {
-			prefix = append(prefix, chart.Dim.Render(strings.Repeat("─", innerW)))
+		if len(others) > 0 {
+			if remaining := len(mounts) - 1 - len(others); remaining > 0 {
+				others = append(others, chart.Dim.Render(fmt.Sprintf("+%d", remaining)))
+			}
+			details = append(details, chart.FitFields(others, " · ", innerW))
+		}
+	} else if d != nil {
+		details = append(details, chart.Dim.Render(chart.ClampTo(d.Device, innerW)))
+	}
+
+	graphH := innerH - 2 - len(details)
+	if graphH < 2 {
+		graphH = 0
+	}
+	lines := make([]string, 0, innerH)
+	if graphH > 0 {
+		slots := innerW * 2
+		lines = append(lines, chart.FillMirror(tailHist(m.hist.readPlot.all(), slots), tailHist(m.hist.writePlot.all(), slots), slots, innerW, graphH,
+			100, 100, chart.SeriesCyan, chart.SeriesBlue)...)
+	}
+	if len(mounts) > 0 {
+		rootBlock := mountBlock(mountByPath(mounts, "/"))
+		lines = append(lines, statTitleLine(rootBlock, innerW), chart.MeterH(rootBlock.pct, innerW, rootBlock.style))
+	}
+	for _, line := range details {
+		if len(lines) >= innerH {
+			break
+		}
+		lines = append(lines, line)
+	}
+	lines = finishPanel(lines, innerW, innerH, "")
+	return framed(title, value, lines, w, h)
+}
+
+func mountByPath(mounts []sysstat.Mount, path string) sysstat.Mount {
+	for _, mt := range mounts {
+		if mt.Path == path {
+			return mt
 		}
 	}
-	bodyH := innerH - len(prefix)
-	lines := renderStatBlocks(blocks, innerW, bodyH, extras)
-	lines = append(prefix, lines...)
-	return framed(title, value, lines[:min(len(lines), innerH)], w, h)
+	if len(mounts) > 0 {
+		return mounts[0]
+	}
+	return sysstat.Mount{}
+}
+
+func mountBlock(mt sysstat.Mount) statBlock {
+	b := statBlock{label: mt.Path, value: "[--]", style: chart.Dim}
+	if mt.HasData {
+		b.value = chart.Bytes(float64(mt.Used)) + "/" + chart.Bytes(float64(mt.Total)) + " " + chart.PctCeil(mt.UsePct)
+		b.pct = mt.UsePct
+		b.style = chart.PctStyle(mt.UsePct)
+	}
+	return b
 }
 
 // —— Docker / Caddy 状态卡 ——
@@ -1040,18 +1327,16 @@ func (m Model) dockerPanel(w, h int) []string {
 		return framed("Docker", "不可达", lines, w, h)
 	}
 	lines := []string{chart.Dim.Render("CPU " + chart.Pct(s.CPUPercent) + " · 内存 " + chart.Bytes(float64(s.MemUsage)))}
-	bodyMax := max(innerH-1, 0)
 	// 名称列吃掉剩余宽度，最右侧放状态（UP/EXIT），不留空。
 	nameW := max(innerW-25, 6)
 	// 高度够时加列头，和 btop 的进程表一样把各列含义写清楚。
 	if innerH >= 10 {
 		lines = append(lines, dockerHeader(nameW))
-		bodyMax--
 	}
+
+	// 汇总行和列头固定，其余内容组成可滚动正文；刷新后由渲染时的 clamp 自动纠偏。
+	body := make([]string, 0, len(s.Containers)+1)
 	for _, c := range s.Containers {
-		if len(lines) >= bodyMax {
-			break
-		}
 		cpu := "[--]"
 		cpuStyle := chart.Dim
 		if c.HasCPU {
@@ -1072,16 +1357,24 @@ func (m Model) dockerPanel(w, h int) []string {
 			stateStyle = chart.Red
 		}
 		name := chart.PadTo(chart.FadeText(c.Name, nameW), nameW)
-		lines = append(lines, stateStyle.Render("●")+" "+name+" "+
+		body = append(body, stateStyle.Render("●")+" "+name+" "+
 			cpuStyle.Render(fmt.Sprintf("%5s", cpu))+" "+chart.Dim.Render(fmt.Sprintf("%8s", mem))+" "+
 			stateStyle.Render(fmt.Sprintf("%7s", c.ShortState())))
 	}
 	if len(s.Containers) == 0 {
-		lines = append(lines, chart.Dim.Render("无容器"))
+		body = append(body, chart.Dim.Render("无容器"))
 	}
-	if c, ok := s.BusiestCPU(); ok && len(lines) < bodyMax {
-		lines = append(lines, chart.Dim.Render("最忙 "+c.Name+" "+chart.Pct(c.CPUPercent)))
+	if c, ok := s.BusiestCPU(); ok {
+		body = append(body, chart.Dim.Render("最忙 "+c.Name+" "+chart.Pct(c.CPUPercent)))
 	}
+	rows := dockerListRows(innerH)
+	start := max(min(m.dockerScroll, max(len(body)-rows, 0)), 0)
+	end := min(start+rows, len(body))
+	visible := append([]string(nil), body[start:end]...)
+	if end < len(body) {
+		visible = chart.FadeRows(visible)
+	}
+	lines = append(lines, visible...)
 	lines = finishPanel(lines, innerW, innerH, "")
 	return framed("Docker", fmt.Sprintf("%d/%d", s.Running, s.Total), lines, w, h)
 }
@@ -1136,11 +1429,8 @@ func (m Model) caddyPanel(w, h int) []string {
 		healthStyle.Render(chart.ClampTo(health, rightW)),
 		leftW, rightW,
 	)}
+	body := make([]string, 0, max(len(s.Domains), len(s.Upstreams))+3)
 	rows := max(len(s.Domains), len(s.Upstreams))
-	dataMax := max(innerH-1, 0) // 留 header
-	if rows > dataMax {
-		rows = dataMax
-	}
 	for i := 0; i < rows; i++ {
 		left, right := chart.Dim.Render("—"), chart.Dim.Render("—")
 		if i < len(s.Domains) {
@@ -1154,18 +1444,23 @@ func (m Model) caddyPanel(w, h int) []string {
 			}
 			right = st.Render("●") + " " + chart.Text.Render(chart.ClampTo(upstreamPort(u.Address), max(rightW-2, 1)))
 		}
-		lines = append(lines, twoColumnLine(left, right, leftW, rightW))
+		body = append(body, twoColumnLine(left, right, leftW, rightW))
 	}
-	bodyMax := max(innerH, 0)
 	if len(s.Domains) == 0 {
-		lines = append(lines, chart.Dim.Render("未解析到域名"))
+		body = append(body, chart.Dim.Render("未解析到域名"))
 	}
-	if len(lines) < bodyMax {
-		lines = append(lines, chart.Dim.Render(chart.FadeText("API "+s.AdminURL, innerW)))
+	body = append(body,
+		chart.Dim.Render(chart.FadeText("API "+s.AdminURL, innerW)),
+		chart.Dim.Render(chart.FadeText("文件 "+s.ConfigPath, innerW)),
+	)
+	visibleRows := caddyListRows(innerH)
+	start := max(min(m.caddyScroll, max(len(body)-visibleRows, 0)), 0)
+	end := min(start+visibleRows, len(body))
+	visible := append([]string(nil), body[start:end]...)
+	if end < len(body) {
+		visible = chart.FadeRows(visible)
 	}
-	if len(lines) < bodyMax {
-		lines = append(lines, chart.Dim.Render(chart.FadeText("文件 "+s.ConfigPath, innerW)))
-	}
+	lines = append(lines, visible...)
 	lines = finishPanel(lines, innerW, innerH, "")
 	return framed("Caddy", "运行中", lines, w, h)
 }

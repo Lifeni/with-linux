@@ -221,12 +221,13 @@
 #### 8.1.2 动作
 
 - `POST /containers/{id}/start`、`/stop`、`/restart`，成功返回 204；失败返回 JSON `message`。2026-10-20 用户要求弹窗内直接点按钮执行，**没有二级菜单与二次确认**；测试只打 fake socket。
+- 2026-10-22 真实一次性 Alpine 容器验证：`restart` 耗时 **10.68s**，因为 Docker 会先按停止超时优雅终止进程再启动。普通查询的 5 秒 HTTP 超时不适用于动作请求；客户端已为 start/stop/restart 使用独立 60 秒超时。
 - 只允许对列表中存在的容器 ID 操作；不实现 exec、删除、镜像/Compose。socket 等价 root，代码只调用这几个端点。
 
 #### 8.1.3 日志
 
 - `GET /containers/{id}/logs?stdout=1&stderr=1&tail=200&timestamps=0`，一次性读取。
-- 非 TTY 容器的流是**多路复用帧**：8 字节头 = 1 字节流类型（0 stdin/1 stdout/2 stderr）＋ 3 字节 0 ＋ 4 字节大端 payload 长度；随后是 payload。TTY 容器是原始字节流。容器是否 TTY 从 `GET /containers/{id}/json` 的 `.Config.Tty` 判断。
+- 非 TTY 容器的流是**多路复用帧**：8 字节头 = 1 字节流类型（0 stdin/1 stdout/2 stderr）＋ 3 字节 0 ＋ 4 字节大端 payload 长度；随后是 payload。TTY 容器是原始字节流。容器是否 TTY 从 `GET /containers/{id}/json` 的 `.Config.Tty` 判断；该只读 inspect 端点已明确纳入允许范围，且只读取这一个字段。
 - 实现上限：200 行、256 KiB；超限截断并标记；显示前剥离 SGR（防止命令输出里的 ANSI 破坏弹窗布局）；日志只在内存，不写盘；不做 follow。
 - 空日志显示 `（无日志）`；API 404/权限/超时在弹窗内显示短错误。
 
@@ -287,3 +288,22 @@
   - Coding Plan 的 5h/7d 用量来自 `WorkspaceBillingPreflight.codingPlan.windows[]`，字段 `usedCredits`/`limitCredits`/`durationSeconds`/`resetsAt`（`packages/contracts/src/api/collab.ts`）；但客户端是通过 **`vela billing preflight --format json` CLI** 读取，未找到公开的 HTTP preflight 路径与 API Key 认证说明。
 - 结论：不能像 OpenCode/Command Code 那样凭猜测加第三个用量面板。需要用户提供 OpenDesign API 文档/可用的 preflight HTTP 端点与 key 类型，或确认只做钱包余额（wallet balance）展示；`vela` 当前未安装。
 - 2026-10-21 用用户提供的 OpenDesign Key 只读测试：`GET /api/v1/wallet/balance`、`/api/v1/me`、`/api/v1/models` 均返回 401；`/api/v1/usage`、`/api/v1/credits` 返回 404。该 Key 不是 OpenDesign 桌面 control key，且未能找到其对应的 usage HTTP 端点；继续接入需要用户提供 API 设置页的 Base URL/文档或一条可用的用量响应。
+
+## 11. 历史图不可变（2026-10-22）
+
+- 用户反馈 CPU/网络/磁盘图表中，已经出现过的历史柱高度会随刷新变化。
+- 代码路径确认两个独立原因：
+  1. 网络与磁盘原先每帧用当前 120 点中的最大速率重新 `AutoMax`；新峰值一出现，全部旧柱会按更大量程重新渲染并变矮。
+  2. 主图把 120 个样本按任意图宽插值到 `2×图宽` 个点列。图宽与 119 个采样间隔不整除时，新样本会让旧样本的横向坐标移动非整数点列，字符栅格重新量化后产生“高度变了”的视觉变化。CPU 纵轴虽固定 0–100%，同样受这个横向重采样影响。
+- 修复原则：采样时冻结新点高度、显示时固定一个样本占一个 braille 点列。
+- 网络/磁盘保存两套历史：原始速率 ring 用于当前信息，归一化百分比 ring 用于绘图；新量程只影响之后插入的点。
+- CPU/网络/磁盘主图使用点列容量作为 `slots`；历史不足时补 0，历史超出点列宽度时显示最近 N 秒。采样 ring 仍保留 120 点（2 分钟）。
+- 回归判据：加入新样本后，取旧点列与上一帧对应点列比较，所有 braille 位必须相同；同一逻辑值在新量程出现前后不得变化。
+
+## 12. 面板视觉密度与镜像基线（2026-10-22）
+
+- 120×30 实拍显示：内存原有 4 条分类进度条、磁盘原有 3 个挂载点各一条进度条，压缩了历史图高度；CPU 放大态右侧 4 行一核 sparkline 被均匀摊到 28 行内，产生大片空白。
+- 调整结论：主页面内存只保留“已用”一条主进度条；磁盘只保留 `/` 一条主进度条。其他分类改成文字摘要，把内高优先给历史图。
+- CPU 放大态每核历史图改为多行（测试高度下 5 行/核），右栏信息密度随整屏高度增长；网络放大态右栏补接口、IPv4、累计与错误/丢包。
+- 镜像图保留原画法：上基线 `mid+1`、下基线 `mid-1`，中间空 1 个点行。下载基线 owner 固定为第二条序列（蓝色）。
+- 早期列表渐隐只改最后 3 行，且 245/242/238 在常见终端色盘里过于接近；现改为对整个可见列表按 255→237 连续取灰阶。

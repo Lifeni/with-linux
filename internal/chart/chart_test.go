@@ -71,3 +71,23 @@ func TestFadeText(t *testing.T) {
 		t.Errorf("未超宽 = %q", got)
 	}
 }
+
+func TestFadeRowsBottomUp(t *testing.T) {
+	lines := []string{
+		Text.Render("first"),
+		Dim.Render("second"),
+		Green.Render("third"),
+		Red.Render("fourth"),
+	}
+	got := FadeRows(lines)
+	for i, want := range []string{"first", "second", "third", "fourth"} {
+		if plain(got[i]) != want {
+			t.Errorf("第 %d 行可见文本 = %q, want %q", i, plain(got[i]), want)
+		}
+	}
+	for i, color := range []string{"255", "249", "243", "237"} {
+		if !strings.Contains(got[i], "38;5;"+color) {
+			t.Errorf("第 %d 行没有使用渐暗色 %s：%q", i, color, got[i])
+		}
+	}
+}

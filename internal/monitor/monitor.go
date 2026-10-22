@@ -92,6 +92,7 @@ type Model struct {
 	dockerSnap   docker.Snapshot
 	dockerLoaded bool
 	dockerFetch  bool
+	dockerScroll int
 
 	dockerLogs        docker.Logs
 	dockerLogsID      string
@@ -109,6 +110,7 @@ type Model struct {
 	caddySnap   caddy.Snapshot
 	caddyLoaded bool
 	caddyFetch  bool
+	caddyScroll int
 
 	caddySys        caddy.SystemdStatus
 	caddySysErr     error
@@ -367,7 +369,7 @@ func (m Model) DockerAction(id string, action docker.Action) (Model, tea.Cmd) {
 	m.dockerActionLoading = true
 	client := m.docker.Client()
 	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), docker.ActionTimeout)
 		defer cancel()
 		err := client.Act(ctx, id, action)
 		return dockerActionMsg{ID: id, Action: action, Err: err, At: time.Now()}
@@ -534,9 +536,13 @@ func (m Model) memText() string {
 // history 是各条曲线的环形缓冲（120 点 = 2 分钟）。没有数据的那次采样不入队：
 // 曲线因此从右侧生长，不会画出假的 0。
 type history struct {
-	cpu, mem, rx, tx, read, write ring
-	cores                         []ring // 每个核一条（用于每核的小面积图）
-	coreMax                       ring   // 每次采样里最忙的那个核（CPU 图下半部分）
+	cpu, mem            ring
+	rx, tx, read, write ring // 原始速率，保留用于统计与测试
+	rxPlot, txPlot      ring // 采样时按当时量程冻结的百分比高度
+	readPlot, writePlot ring
+	cores               []ring // 每个核一条（用于每核的小面积图）
+	coreMax             ring   // 每次采样里最忙的那个核（CPU 图下半部分）
+	netScale, diskScale float64
 }
 
 func (h *history) push(s sysstat.Sample) {
@@ -556,10 +562,16 @@ func (h *history) push(s sysstat.Sample) {
 	if n := primaryNet(s); n != nil && n.HasRate {
 		h.rx.push(n.RxRate)
 		h.tx.push(n.TxRate)
+		h.netScale = max(h.netScale, chart.AutoMax([]float64{n.RxRate, n.TxRate}), netMinScale)
+		h.rxPlot.push(n.RxRate / h.netScale * 100)
+		h.txPlot.push(n.TxRate / h.netScale * 100)
 	}
 	if d := firstDisk(s); d != nil && d.HasRate {
 		h.read.push(d.ReadRate)
 		h.write.push(d.WriteRate)
+		h.diskScale = max(h.diskScale, chart.AutoMax([]float64{d.ReadRate, d.WriteRate}), ioMinScale)
+		h.readPlot.push(d.ReadRate / h.diskScale * 100)
+		h.writePlot.push(d.WriteRate / h.diskScale * 100)
 	}
 }
 

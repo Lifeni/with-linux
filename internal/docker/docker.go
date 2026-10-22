@@ -20,6 +20,8 @@ const (
 	DefaultSocket = "/var/run/docker.sock"
 	// 每次请求的超时；统计并发拉取，列表失败不会拖垮其它面板。
 	requestTimeout = 5 * time.Second
+	// 启停/重启需要等容器进程退出再启动，不能沿用普通查询的 5 秒超时。
+	ActionTimeout = 60 * time.Second
 )
 
 // Container 是一个容器的展示快照。
@@ -94,6 +96,7 @@ type Client struct {
 	socket string
 	base   string
 	hc     *http.Client
+	actHC  *http.Client
 
 	versionOnce sync.Once
 	prefix      string
@@ -116,12 +119,13 @@ func NewClientAt(socket string) *Client {
 		socket: socket,
 		base:   "http://docker",
 		hc:     &http.Client{Transport: tr, Timeout: requestTimeout},
+		actHC:  &http.Client{Transport: tr, Timeout: ActionTimeout},
 	}
 }
 
 // newClientWithBase 只用于测试：把 HTTP 客户端换成 httptest。
 func newClientWithBase(base string, hc *http.Client) *Client {
-	return &Client{base: strings.TrimRight(base, "/"), hc: hc}
+	return &Client{base: strings.TrimRight(base, "/"), hc: hc, actHC: hc}
 }
 
 func (c *Client) ensureVersion(ctx context.Context) {
@@ -141,11 +145,24 @@ func (c *Client) ensureVersion(ctx context.Context) {
 
 func (c *Client) do(ctx context.Context, method, path string, out any) error {
 	c.ensureVersion(ctx)
-	return c.doRaw(ctx, method, c.prefix+path, out)
+	return c.doRawWithClient(ctx, c.hc, method, c.prefix+path, out)
 }
 
 func (c *Client) doRaw(ctx context.Context, method, path string, out any) error {
-	resp, err := c.request(ctx, method, path)
+	return c.doRawWithClient(ctx, c.hc, method, path, out)
+}
+
+func (c *Client) doAction(ctx context.Context, method, path string) error {
+	c.ensureVersion(ctx)
+	hc := c.actHC
+	if hc == nil {
+		hc = c.hc
+	}
+	return c.doRawWithClient(ctx, hc, method, c.prefix+path, nil)
+}
+
+func (c *Client) doRawWithClient(ctx context.Context, hc *http.Client, method, path string, out any) error {
+	resp, err := c.requestWithClient(ctx, hc, method, path)
 	if err != nil {
 		return err
 	}
@@ -163,12 +180,16 @@ func (c *Client) doRaw(ctx context.Context, method, path string, out any) error 
 }
 
 func (c *Client) request(ctx context.Context, method, path string) (*http.Response, error) {
+	return c.requestWithClient(ctx, c.hc, method, path)
+}
+
+func (c *Client) requestWithClient(ctx context.Context, hc *http.Client, method, path string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.hc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("连接 Docker 失败：%w", err)
 	}
@@ -288,7 +309,7 @@ func (c *Client) Act(ctx context.Context, id string, action Action) error {
 	if id == "" {
 		return fmt.Errorf("容器 ID 为空")
 	}
-	return c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/"+string(action), nil)
+	return c.doAction(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/"+string(action))
 }
 
 // Collector 累积 CPU 基线并生成 Snapshot。接口调用可并发，但相同容器的两次刷新应由调用方串行。

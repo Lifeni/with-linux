@@ -8,11 +8,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func fakeVersion(w http.ResponseWriter, _ *http.Request) {
@@ -114,6 +116,51 @@ func TestActions(t *testing.T) {
 	}
 	if err := cl.Act(context.Background(), "c1", Action("rm")); err == nil {
 		t.Error("不允许的动作没有报错")
+	}
+}
+
+func TestActionUsesLongerClientTimeout(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/version", fakeVersion)
+	mux.HandleFunc("/v1.56/containers/c1/restart", func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	fast := srv.Client()
+	fast.Timeout = 10 * time.Millisecond
+	slow := &http.Client{Transport: srv.Client().Transport}
+	cl := &Client{base: srv.URL, hc: fast, actHC: slow}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := cl.Act(ctx, "c1", ActionRestart); err != nil {
+		t.Fatalf("重启不应被普通查询超时截断：%v", err)
+	}
+}
+
+func TestNewClientUsesActionTimeout(t *testing.T) {
+	cl := NewClientAt("/tmp/nonexistent-docker.sock")
+	if cl.actHC == nil || cl.actHC.Timeout != ActionTimeout {
+		t.Fatalf("action timeout = %v, want %v", cl.actHC, ActionTimeout)
+	}
+	if cl.actHC.Timeout <= cl.hc.Timeout {
+		t.Fatalf("动作超时 %v 应大于普通查询超时 %v", cl.actHC.Timeout, cl.hc.Timeout)
+	}
+}
+
+// TestRealDockerRestart 是显式开启的真实 daemon 集成检查；默认跳过，避免日常测试碰用户容器。
+// 运行前必须把一次性容器 ID 放进 WL_TEST_CONTAINER_ID。
+func TestRealDockerRestart(t *testing.T) {
+	id := os.Getenv("WL_TEST_CONTAINER_ID")
+	if id == "" {
+		t.Skip("未指定 WL_TEST_CONTAINER_ID")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ActionTimeout)
+	defer cancel()
+	if err := NewClient().Act(ctx, id, ActionRestart); err != nil {
+		t.Fatalf("真实 Docker 重启失败：%v", err)
 	}
 }
 

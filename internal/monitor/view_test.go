@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -158,18 +159,24 @@ func TestWideLayoutKeepsNetworkWideAndAIInRail(t *testing.T) {
 	if pl == nil {
 		t.Fatal("宽屏布局没有解")
 	}
-	var netRect, aiRect grid.Rect
-	var haveNet, haveAI bool
+	var memRect, netRect, aiRect, dockerRect, caddyRect grid.Rect
+	var haveMem, haveNet, haveAI, haveDocker, haveCaddy bool
 	for _, p := range pl {
 		switch p.Panel.ID {
+		case PanelMem:
+			memRect, haveMem = p.Rect, true
 		case PanelNet:
 			netRect, haveNet = p.Rect, true
 		case PanelOpenCode:
 			aiRect, haveAI = p.Rect, true
+		case PanelDocker:
+			dockerRect, haveDocker = p.Rect, true
+		case PanelCaddy:
+			caddyRect, haveCaddy = p.Rect, true
 		}
 	}
-	if !haveNet || !haveAI {
-		t.Fatal("缺少网络或 AI 面板")
+	if !haveMem || !haveNet || !haveAI || !haveDocker || !haveCaddy {
+		t.Fatal("宽屏布局缺少内存、网络、AI、Docker 或 Caddy")
 	}
 	if netRect.W < WideLayoutWidth*3/5-2 {
 		t.Errorf("网络宽度 = %d，应当吃满左侧下排", netRect.W)
@@ -177,16 +184,12 @@ func TestWideLayoutKeepsNetworkWideAndAIInRail(t *testing.T) {
 	if aiRect.X < netRect.X+netRect.W {
 		t.Errorf("AI 面板 X = %d，应当落在右侧服务栏（网络右边界 %d 之后）", aiRect.X, netRect.X+netRect.W)
 	}
-	// 上排仍应是内存/磁盘/Docker 同一行。
-	lines := strings.Split(plainPage(m.Lines(WideLayoutWidth, 30)), "\n")
-	found := false
-	for _, line := range lines {
-		if strings.Contains(line, "内存") && strings.Contains(line, "磁盘") && strings.Contains(line, "Docker") {
-			found = true
-		}
+	if aiRect.Y != memRect.Y {
+		t.Errorf("AI 顶部 Y = %d，应与左侧内存/磁盘上排 Y = %d 对齐", aiRect.Y, memRect.Y)
 	}
-	if !found {
-		t.Errorf("上排没有同时出现内存/磁盘/Docker：\n%s", strings.Join(lines, "\n"))
+	if !(aiRect.Y < dockerRect.Y && dockerRect.Y < caddyRect.Y) {
+		t.Errorf("右侧栏顺序应为 AI→Docker→Caddy，实际 Y: AI=%d Docker=%d Caddy=%d",
+			aiRect.Y, dockerRect.Y, caddyRect.Y)
 	}
 }
 
@@ -335,6 +338,67 @@ func TestDiskPanelShowsInodeUsage(t *testing.T) {
 	}
 }
 
+func TestMemoryPanelUsesOneMeterAndHistory(t *testing.T) {
+	m := testModel(t, false, false)
+	m.sample.Mem.Free = 512 << 20
+	lines := m.memPanel(50, 10)
+	page := plainPage(lines)
+	meters := 0
+	for _, line := range strings.Split(page, "\n") {
+		if strings.Contains(line, "■") {
+			meters++
+		}
+	}
+	if meters != 1 {
+		t.Fatalf("内存主面板应只有一个主进度条，实际 %d 行：\n%s", meters, page)
+	}
+	if !strings.Contains(page, "可用") || !strings.Contains(page, "缓存") || !strings.Contains(page, "空闲") {
+		t.Errorf("内存主面板缺少精简分类：\n%s", page)
+	}
+	hasBraille := false
+	for _, r := range page {
+		if r >= 0x2800 && r <= 0x28FF {
+			hasBraille = true
+			break
+		}
+	}
+	if !hasBraille {
+		t.Errorf("内存主面板没有历史图：\n%s", page)
+	}
+}
+
+func TestDiskPanelUsesOneMeterAndTallerHistory(t *testing.T) {
+	m := testModel(t, false, false)
+	lines := m.diskPanel(50, 10)
+	page := plainPage(lines)
+	meters := 0
+	for _, line := range strings.Split(page, "\n") {
+		if strings.Contains(line, "■") {
+			meters++
+		}
+	}
+	if meters != 1 {
+		t.Fatalf("磁盘主面板应只保留一个目录进度条，实际 %d 行：\n%s", meters, page)
+	}
+	if !strings.Contains(page, "/ ") || !strings.Contains(page, "/boot") {
+		t.Errorf("磁盘主面板应保留根目录进度条，并把 /boot 收成摘要：\n%s", page)
+	}
+	graphRows := 0
+	rootIndex := -1
+	for i, line := range strings.Split(page, "\n") {
+		if strings.Contains(line, " / ") && strings.Contains(line, "21G/231G") {
+			rootIndex = i
+			break
+		}
+	}
+	if rootIndex > 0 {
+		graphRows = rootIndex - 1
+	}
+	if graphRows < 4 {
+		t.Fatalf("磁盘面板内高 8 时历史图应至少 4 行，实际 %d：\n%s", graphRows, page)
+	}
+}
+
 func TestDiskPanelAlwaysKeepsRoot(t *testing.T) {
 	m := testModel(t, false, false)
 	m.sample.Mount = []sysstat.Mount{
@@ -354,6 +418,39 @@ func TestDiskPanelAlwaysKeepsRoot(t *testing.T) {
 	}
 	if strings.Contains(tight, "/boot") {
 		t.Errorf("高度不够时 /boot 应当被砍掉：\n%s", tight)
+	}
+}
+
+func TestExpandedCPUUsesMultirowCoreGraphs(t *testing.T) {
+	m := testModel(t, false, false)
+	m.cpuModel = "RK3588"
+	lines := m.PanelLines(PanelCPU, 120, 30)
+	if len(lines) != 30 {
+		t.Fatalf("CPU 放大面板出了 %d 行, want 30", len(lines))
+	}
+	page := plainPage(lines)
+	for _, want := range []string{"CPU RK3588", "核心", "C0 ", "C7 ", "温度", "负载"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("CPU 放大面板缺少 %q：\n%s", want, page)
+		}
+	}
+	coreLines, _ := m.coreColumnsSized(48, 4, 5)
+	if len(coreLines) != 20 {
+		t.Fatalf("8 核、每核 5 行图应输出 20 行，实际 %d", len(coreLines))
+	}
+}
+
+func TestExpandedNetworkShowsRightSideDetails(t *testing.T) {
+	m := testModel(t, false, false)
+	lines := m.PanelLines(PanelNet, 120, 30)
+	if len(lines) != 30 {
+		t.Fatalf("网络放大面板出了 %d 行, want 30", len(lines))
+	}
+	page := plainPage(lines)
+	for _, want := range []string{"速率", "接口 enp1s0", "IPv4 192.0.2.10", "累计", "错误"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("网络放大面板右侧缺少 %q：\n%s", want, page)
+		}
 	}
 }
 
@@ -587,6 +684,126 @@ func TestDockerHeaderOnlyWhenTall(t *testing.T) {
 	short := plainPage(m.dockerPanel(50, 10))
 	if strings.Contains(short, "状态") {
 		t.Errorf("矮 Docker 卡不该挤列头：\n%s", short)
+	}
+}
+
+func TestDockerPanelUsesLastRowForContainer(t *testing.T) {
+	m := testModel(t, false, false)
+	m.dockerLoaded = true
+	containers := make([]docker.Container, 8)
+	for i := range containers {
+		containers[i] = docker.Container{
+			ID: fmt.Sprintf("c%d", i+1), Name: fmt.Sprintf("container-%d", i+1),
+			State: "running", Running: true, HasStats: true, HasCPU: true,
+			CPUPercent: float64(i), MemUsage: uint64(i+1) << 20,
+		}
+	}
+	m.dockerSnap = docker.Snapshot{
+		Containers: containers, Running: len(containers), Total: len(containers),
+	}
+
+	page := plainPage(m.dockerPanel(50, 12))
+	if !strings.Contains(page, "container-8") {
+		t.Fatalf("8 个容器时最后一行不该留空，第 8 个容器应当显示：\n%s", page)
+	}
+}
+
+func TestDockerPanelScrollsContainerList(t *testing.T) {
+	m := testModel(t, false, false)
+	m.dockerLoaded = true
+	containers := make([]docker.Container, 12)
+	for i := range containers {
+		containers[i] = docker.Container{
+			ID: fmt.Sprintf("c%d", i+1), Name: fmt.Sprintf("svc-%02d", i+1),
+			State: "running", Running: true, HasStats: true, HasCPU: true,
+			CPUPercent: float64(i), MemUsage: uint64(i+1) << 20,
+		}
+	}
+	m.dockerSnap = docker.Snapshot{
+		Containers: containers, Running: len(containers), Total: len(containers),
+	}
+
+	top := plainPage(m.dockerPanel(50, 10))
+	if !strings.Contains(top, "svc-01") || strings.Contains(top, "svc-08") {
+		t.Fatalf("Docker 列表顶部视口不对：\n%s", top)
+	}
+	m.dockerScroll = 5
+	scrolled := plainPage(m.dockerPanel(50, 10))
+	if strings.Contains(scrolled, "svc-01") || !strings.Contains(scrolled, "svc-06") || !strings.Contains(scrolled, "svc-12") {
+		t.Fatalf("Docker 列表向下滚动不对：\n%s", scrolled)
+	}
+	m.dockerScroll = 100
+	end := plainPage(m.dockerPanel(50, 10))
+	if !strings.Contains(end, "svc-12") || !strings.Contains(end, "最忙") {
+		t.Fatalf("Docker 列表末端应显示最后容器与最忙明细：\n%s", end)
+	}
+}
+
+func TestCaddyPanelScrollsDomainRows(t *testing.T) {
+	m := testModel(t, false, false)
+	m.caddyLoaded = true
+	m.caddySnap = caddy.Snapshot{
+		Reachable: true, Routes: 20, Healthy: 10,
+		AdminURL: "http://127.0.0.1:2019", ConfigPath: "/tmp/Caddyfile",
+	}
+	for i := 1; i <= 10; i++ {
+		m.caddySnap.Domains = append(m.caddySnap.Domains, fmt.Sprintf("domain-%02d.example", i))
+		m.caddySnap.Upstreams = append(m.caddySnap.Upstreams, caddy.Upstream{Address: fmt.Sprintf("app:%d", 3000+i)})
+	}
+
+	top := plainPage(m.caddyPanel(50, 8))
+	if !strings.Contains(top, "domain-01.example") || strings.Contains(top, "domain-06.example") || strings.Contains(top, "API ") {
+		t.Fatalf("Caddy 列表顶部视口不对：\n%s", top)
+	}
+	m.caddyScroll = 5
+	scrolled := plainPage(m.caddyPanel(50, 8))
+	if strings.Contains(scrolled, "domain-01.example") || !strings.Contains(scrolled, "domain-06.example") {
+		t.Fatalf("Caddy 列表向下滚动不对：\n%s", scrolled)
+	}
+	m.caddyScroll = 100
+	end := plainPage(m.caddyPanel(50, 8))
+	if !strings.Contains(end, "domain-10.example") || !strings.Contains(end, "API http://127.0.0.1:2019") ||
+		!strings.Contains(end, "文件 /tmp/Caddyfile") {
+		t.Fatalf("Caddy 列表末端应显示 API 与配置文件：\n%s", end)
+	}
+}
+
+func TestScrollPanelClampsAndMoves(t *testing.T) {
+	m := testModel(t, false, false)
+	m.dockerLoaded = true
+	m.dockerSnap = docker.Snapshot{Running: 12, Total: 12}
+	for i := 1; i <= 12; i++ {
+		m.dockerSnap.Containers = append(m.dockerSnap.Containers, docker.Container{
+			ID: fmt.Sprintf("c%d", i), Name: fmt.Sprintf("svc-%02d", i), Running: true,
+			HasCPU: true, CPUPercent: float64(i), HasStats: true, MemUsage: uint64(i),
+		})
+	}
+	m.caddyLoaded = true
+	m.caddySnap = caddy.Snapshot{Reachable: true}
+	for i := 1; i <= 12; i++ {
+		m.caddySnap.Domains = append(m.caddySnap.Domains, fmt.Sprintf("d%d.example", i))
+	}
+
+	m = m.ScrollPanel(PanelDocker, 3, WideLayoutWidth, 30)
+	if m.dockerScroll != 3 {
+		t.Fatalf("Docker scroll = %d, want 3", m.dockerScroll)
+	}
+	m = m.ScrollPanel(PanelDocker, 1000, WideLayoutWidth, 30)
+	if m.dockerScroll <= 3 {
+		t.Fatalf("Docker scroll 没有向下 clamp：%d", m.dockerScroll)
+	}
+	m = m.ScrollPanel(PanelDocker, -1, WideLayoutWidth, 30)
+	if m.dockerScroll <= 0 {
+		t.Fatalf("Docker 上滚后仍为 0")
+	}
+
+	m = m.ScrollPanel(PanelCaddy, 2, WideLayoutWidth, 30)
+	if m.caddyScroll != 2 {
+		t.Fatalf("Caddy scroll = %d, want 2", m.caddyScroll)
+	}
+	m = m.ScrollPanel(PanelCaddy, 1000, WideLayoutWidth, 30)
+	if m.caddyScroll <= 2 {
+		t.Fatalf("Caddy scroll 没有向下 clamp：%d", m.caddyScroll)
 	}
 }
 

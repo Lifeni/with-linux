@@ -548,6 +548,27 @@ func TestMonitorWheelAndResize(t *testing.T) {
 	}
 }
 
+func TestWheelOverDockerCardScrollsCard(t *testing.T) {
+	f := newFakeServices(t)
+	m := primeDocker(t, fakeModel(t, f))
+	m.width, m.height = 120, 12
+
+	x, y, ok := findPanelPoint(m, monitor.PanelDocker)
+	if !ok {
+		t.Fatal("找不到 Docker 卡片")
+	}
+	before := plainPage(m.contentLines())
+	screenY := 1 + y - m.contentStart()
+	nm, _ := updateModel(m, tea.MouseWheelMsg{X: x, Y: screenY, Button: tea.MouseWheelDown})
+	after := plainPage(nm.contentLines())
+	if before == after {
+		t.Fatalf("滚轮落在 Docker 卡内没有滚动卡内列表：\n%s", after)
+	}
+	if nm.scroll != 0 {
+		t.Fatalf("滚轮落在 Docker 卡内时页面也被滚动了：%d", nm.scroll)
+	}
+}
+
 func TestNoWrapAtAnyWidth(t *testing.T) {
 	for _, w := range []int{10, 12, 20, 30, 59, 80, 100, 120, 200} {
 		m := newTestModel()
@@ -577,6 +598,18 @@ type fakeServices struct {
 	mu       sync.Mutex
 	caddy    []string
 	reload   int
+}
+
+func (f *fakeServices) countCaddyCalls(prefix string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, call := range f.caddy {
+		if strings.HasPrefix(call, prefix) {
+			n++
+		}
+	}
+	return n
 }
 
 func newFakeServices(t *testing.T) *fakeServices {
@@ -702,6 +735,25 @@ func runCmd(t *testing.T, m Model, cmd tea.Cmd) Model {
 	return m
 }
 
+// runCmdOnce 执行一个命令，并把 tea.Batch 中的子命令各执行一次。
+// 测试里不能像 Program 那样递归追 tick，否则每秒采样会形成无限命令链。
+func runCmdOnce(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		return m
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			nm, _ := updateModel(m, sub())
+			m = nm
+		}
+		return m
+	}
+	nm, _ := updateModel(m, msg)
+	return nm
+}
+
 func findPanelPoint(m Model, id string) (int, int, bool) {
 	for y := 0; y < m.viewHeight(); y++ {
 		for x := 0; x < m.width; x++ {
@@ -751,7 +803,11 @@ func TestDockerModalButtonsAndLogs(t *testing.T) {
 		t.Fatalf("点 Docker 卡片后 modal = %d", m.modal)
 	}
 	page := plainPage(m.modalWindow())
-	for _, want := range []string{"Docker 管理", "web", "api", "UP", "EXIT", "[停止]", "[重启]", "[日志]", "[关闭]"} {
+	for _, want := range []string{
+		"Docker 管理", "web", "api", "UP", "EXIT",
+		"CPU [--] · 内存 200B / 1000B (20%)",
+		"[停止]", "[重启]", "[日志]", "[关闭]",
+	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("Docker 弹窗缺少 %q：\n%s", want, page)
 		}
@@ -826,10 +882,14 @@ func TestCaddyModalButtons(t *testing.T) {
 			t.Fatalf("Caddy 弹窗缺少 %q：\n%s", want, page)
 		}
 	}
+	systemdBefore := f.countCaddyCalls("systemctl ")
 	nm, cmd = clickModalLabel(t, m, "[刷新]")
-	m = runCmd(t, nm, cmd)
+	m = runCmdOnce(t, nm, cmd)
 	if !strings.Contains(plainPage(m.modalWindow()), "Caddy 管理") {
 		t.Fatal("刷新后 Caddy 弹窗不见了")
+	}
+	if got := f.countCaddyCalls("systemctl "); got <= systemdBefore {
+		t.Fatalf("[刷新] 应同时刷新 systemd：before=%d after=%d", systemdBefore, got)
 	}
 	nm, cmd = clickModalLabel(t, m, "[重载配置]")
 	m = runCmd(t, nm, cmd)

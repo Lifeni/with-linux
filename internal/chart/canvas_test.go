@@ -256,6 +256,33 @@ func TestPlotFillGrowsFromRight(t *testing.T) {
 	}
 }
 
+func TestFillHistoryShiftsWithoutHeightRecomputation(t *testing.T) {
+	const slots, width, height = 6, 3, 1
+	old := NewCanvas(width, height)
+	old.PlotFill([]float64{10, 30, 20, 80, 60, 40}, slots, 0, 100, 0)
+
+	// 新采样并入后，旧样本 [30,20,80,60,40] 应原样左移一个点列。
+	next := NewCanvas(width, height)
+	next.PlotFill([]float64{30, 20, 80, 60, 40, 90}, slots, 0, 100, 0)
+	for x := 0; x < width*2-1; x++ {
+		for y := 0; y < height*4; y++ {
+			if dotSet(next, x, y) != dotSet(old, x+1, y) {
+				t.Fatalf("点列 x=%d y=%d 的历史高度被重算：old(x+1)=%v next(x)=%v",
+					x, y, dotSet(old, x+1, y), dotSet(next, x, y))
+			}
+		}
+	}
+}
+
+func dotSet(c *Canvas, x, y int) bool {
+	if x < 0 || y < 0 || x >= c.w*2 || y >= c.h*4 {
+		return false
+	}
+	col, row := x/2, c.h-1-y/4
+	dy := 3 - y%4
+	return c.cells[row][col]&brailleBits[dy][x%2] != 0
+}
+
 func TestFillExactSize(t *testing.T) {
 	for _, size := range [][2]int{{1, 1}, {10, 2}, {39, 5}} {
 		lines := Fill([]float64{10, 80, 40}, 3, size[0], size[1], 0, 100, SeriesBlue)
@@ -270,12 +297,23 @@ func TestFillExactSize(t *testing.T) {
 	}
 }
 
-func TestFillMirrorDirectionAndGap(t *testing.T) {
-	// 8 行 → 32 个点行：中线 15，上基线 16、下基线 14，中间 15 空一行点
+func TestFillMirrorDirectionWithGap(t *testing.T) {
+	// 8 行 → 32 个点行：上基线 16、下基线 14，中间点行 15 留空。
 	c := NewCanvas(4, 8)
 	hundreds := []float64{100, 100, 100, 100, 100}
 	zeros := []float64{0, 0, 0, 0, 0}
 	c.PlotFillMirror(hundreds, zeros, 5, 100, 100, 0, 1)
+	if dotSet(c, 0, 15) {
+		t.Fatal("上传/下载基线之间的点行 15 应当留空")
+	}
+	if !dotSet(c, 0, 14) || !dotSet(c, 0, 16) {
+		t.Fatal("下基线应在点行 14、上基线应在点行 16")
+	}
+	// 下基线归属下载序列，必须使用蓝色（series 1），不能被上传的青色覆盖。
+	col, row := 0/2, c.h-1-14/4
+	if got := c.owner[row][col]; got != 1 {
+		t.Fatalf("下载基线序列归属 = %d, want 1（蓝色）", got)
+	}
 	// 上序列 100%：上半部分（字符行 0–3）应当填满
 	for row := 0; row < 4; row++ {
 		for col := 0; col < 4; col++ {
