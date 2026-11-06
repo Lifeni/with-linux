@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed
+
+- AI 用量错误态改为居中显示自动重试倒计时；点击或自动开始重试后立即显示「正在重试…」。
+
+### Fixed
+
+- 宽屏历史图不再在左侧保留一块永久不动的补零区域：固定 120 点历史会铺满画布，而不是按超过历史容量的点列数持续补零；同步修正 CPU、内存、网络、磁盘与每核历史图。
+- OpenCode Go 与 Command Code 的倒计时和自动重试统一由系统页每秒 tick 驱动，避免子模型独立计时链失效后请求不再自动重试。
+
 ## [0.5.2] - 2026-10-22
 
 ### Added

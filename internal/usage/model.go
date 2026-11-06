@@ -40,8 +40,6 @@ type fetchDoneMsg struct {
 	res Result
 }
 
-type tickMsg time.Time
-
 // RefreshMsg 是手动刷新消息（R 键），会重读配置文件。
 type RefreshMsg struct{}
 
@@ -56,10 +54,6 @@ func New() Model {
 	m = m.reloadKey()
 	m, _ = m.startFetch()
 	return m
-}
-
-func tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func (m Model) fetchCmd() tea.Cmd {
@@ -85,9 +79,10 @@ func (m Model) startFetch() (Model, tea.Cmd) {
 	return m, m.fetchCmd()
 }
 
-// Init 启动 New 中已经准备好的取数，并启动唯一一条每秒 tick 循环。
+// Init 启动 New 中已经准备好的取数。每秒推进由 monitor 的主 tick 统一调用 Tick，
+// 避免用量子模型各维护一条独立计时链。
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.fetchCmd(), tickCmd())
+	return m.fetchCmd()
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
@@ -113,14 +108,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tickMsg:
-		m.now = time.Now()
-		if !m.fetching && m.hasKey && !m.nextFetchAt.IsZero() && !m.now.Before(m.nextFetchAt) {
-			m, cmd := m.startFetch()
-			return m, tea.Batch(cmd, tickCmd())
-		}
-		return m, tickCmd()
-
 	case RefreshMsg:
 		m = m.reloadKey()
 		m, cmd := m.startFetch()
@@ -134,6 +121,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	}
+	return m, nil
+}
+
+// Tick 用主页面的每秒 tick 推进倒计时；到期时启动下一轮自动取数。
+// 返回的命令只可能是取数命令，下一拍由 monitor 的主 tick 继续安排。
+func (m Model) Tick(now time.Time) (Model, tea.Cmd) {
+	m.now = now
+	if !m.fetching && m.hasKey && !m.nextFetchAt.IsZero() && !m.now.Before(m.nextFetchAt) {
+		return m.startFetch()
 	}
 	return m, nil
 }
@@ -168,7 +165,7 @@ func ErrorText(code string) string {
 	case ErrNoSub:
 		return "无权限（403）"
 	case ErrNetwork:
-		return "连接失败 · 10s 后重试"
+		return "连接失败"
 	default:
 		return "请求失败：" + code
 	}
@@ -181,6 +178,9 @@ func (m Model) ShortStatusText() string {
 	}
 	if !m.hasKey {
 		return "未配置"
+	}
+	if m.fetching && m.lastError != "" {
+		return "重试"
 	}
 	if m.lastError != "" {
 		return shortError(m.lastError)
@@ -222,8 +222,11 @@ func (m Model) StatusText() (text string, severity int) {
 	if !m.hasKey {
 		return "未配置 Key", 1
 	}
+	if m.fetching && m.lastError != "" {
+		return "正在重试…", 2
+	}
 	if m.lastError != "" {
-		return ErrorText(m.lastError), 2
+		return fmt.Sprintf("%s · %ds 后重试", ErrorText(m.lastError), refreshSeconds(m.nextFetchAt, m.now)), 2
 	}
 	if m.fetching {
 		return "查询中…", 0

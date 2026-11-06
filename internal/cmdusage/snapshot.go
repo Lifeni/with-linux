@@ -11,12 +11,18 @@ type Snapshot struct {
 	Status   string     // 状态栏右侧的完整文案（配置类问题带配置文件路径，A4）
 	Short    string     // 窄屏短状态
 	Severity int        // 2 错误（红）/ 1 注意（琥珀）/ 0 正常
+	Retrying bool       // 上一轮失败后正在重试
+	RetryIn  int        // 距离下一次自动重试的秒数；0 表示当前没有重试倒计时
 }
 
 // Snapshot 返回当前用量状态的只读快照。
 func (m Model) Snapshot() Snapshot {
 	s := Snapshot{Notice: m.notice(), Short: m.ShortStatusText()}
 	s.Status, s.Severity = m.StatusText()
+	s.Retrying = m.fetching && m.hasKey && m.lastError != ""
+	if m.hasKey && !m.fetching && m.lastError != "" && !m.nextFetchAt.IsZero() {
+		s.RetryIn = refreshSeconds(m.nextFetchAt, m.now)
+	}
 	if m.configErr != "" || !m.hasKey {
 		s.Status += "：" + m.configPath // A4：完整路径放状态栏，小面板塞不下
 	}
@@ -33,6 +39,8 @@ func (m Model) notice() string {
 		return m.configErr // 「配置损坏」/「配置无法读取」
 	case !m.hasKey:
 		return "未配置 Key"
+	case m.fetching && m.lastError != "":
+		return "正在重试…"
 	case m.lastError != "":
 		return ErrorText(m.lastError)
 	case m.data == nil:

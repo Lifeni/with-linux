@@ -223,7 +223,7 @@ func TestProviderNoticeInPanel(t *testing.T) {
 		t.Errorf("缺 key 时面板应当提示未配置与设置入口：\n%s", page)
 	}
 	if !strings.Contains(page, "点击面板重试") {
-		t.Errorf("错误面板应当提示点击重试：\n%s", page)
+		t.Errorf("配置问题面板应当保留点击重试入口：\n%s", page)
 	}
 }
 
@@ -318,13 +318,54 @@ func TestUsagePanelWindowsAndDegradation(t *testing.T) {
 	}
 
 	// 出错时面板内是短提示，标题栏不放值；提示只该出现一次（其余行留白）
-	errPanel := providerSnapshot{id: PanelOpenCode, title: "OpenCode Go 用量", notice: "Key 无效（401）", severity: 2}
-	page = plainPage(m.usagePanel(errPanel, 48, 5))
-	if !strings.Contains(page, "Key 无效（401）") {
+	errPanel := providerSnapshot{
+		id: PanelOpenCode, title: "OpenCode Go 用量", notice: "连接失败",
+		severity: 2, retryIn: 7,
+	}
+	errLines := m.usagePanel(errPanel, 48, 5)
+	page = plainPage(errLines)
+	if !strings.Contains(page, "连接失败") {
 		t.Errorf("出错时面板应当显示错误文案：\n%s", page)
 	}
-	if got := strings.Count(page, "Key 无效（401）"); got != 1 {
+	if got := strings.Count(page, "连接失败"); got != 1 {
 		t.Errorf("错误文案出现了 %d 次, want 1：\n%s", got, page)
+	}
+	if !strings.Contains(page, "7s 后重试") || !strings.Contains(page, "点击面板重试") {
+		t.Errorf("失败等待态缺少倒计时或点击重试提示：\n%s", page)
+	}
+	for _, text := range []string{"连接失败", "7s 后重试", "点击面板重试"} {
+		for _, line := range errLines {
+			visible := plain(line)
+			runes := []rune(visible)
+			idx := -1
+			for i := 0; i+len([]rune(text)) <= len(runes); i++ {
+				if string(runes[i:i+len([]rune(text))]) == text {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				continue
+			}
+			left := lipgloss.Width(string(runes[:idx])) - 2
+			right := lipgloss.Width(visible) - lipgloss.Width(string(runes[:idx])) - lipgloss.Width(text) - 2
+			delta := left - right
+			if delta < 0 {
+				delta = -delta
+			}
+			if left < 0 || right < 0 || delta > 1 {
+				t.Errorf("%q 没有水平居中：left=%d right=%d line=%q", text, left, right, visible)
+			}
+		}
+	}
+
+	retryingPanel := errPanel
+	retryingPanel.notice = "正在重试…"
+	retryingPanel.retrying = true
+	retryingPanel.retryIn = 0
+	page = plainPage(m.usagePanel(retryingPanel, 48, 5))
+	if !strings.Contains(page, "正在重试…") {
+		t.Errorf("点击重试后应当立即显示正在重试：\n%s", page)
 	}
 }
 
@@ -352,6 +393,49 @@ func TestCPUPanelDegradation(t *testing.T) {
 	}
 	if !strings.Contains(plain(tiny[0]), "CPU") {
 		t.Errorf("极小面板第一行应当有标题：%q", plain(tiny[0]))
+	}
+}
+
+func TestHistorySlotsCapAtFullHistory(t *testing.T) {
+	tests := []struct {
+		graphWidth int
+		want       int
+	}{
+		{20, 40},
+		{60, HistoryLen},
+		{100, HistoryLen},
+		{200, HistoryLen},
+	}
+	for _, tt := range tests {
+		if got := historySlots(tt.graphWidth); got != tt.want {
+			t.Errorf("图宽 %d：historySlots = %d, want %d", tt.graphWidth, got, tt.want)
+		}
+	}
+}
+
+func TestWideCPUHistoryFillsWholeGraphWidth(t *testing.T) {
+	m := testModel(t, false, false)
+	m.hist.cpu = ring{vals: make([]float64, HistoryLen)}
+	m.hist.coreMax = ring{vals: make([]float64, HistoryLen)}
+	for i := 0; i < HistoryLen; i++ {
+		m.hist.cpu.vals[i] = 100
+		m.hist.coreMax.vals[i] = 100
+	}
+
+	const width = 180
+	innerW, _ := innerSize(width, 16)
+	graphW, _, ok := splitColumns(innerW, 46, 20)
+	if !ok {
+		t.Fatal("测试宽度没有进入 CPU 左图右核布局")
+	}
+	rows := m.cpuPanel(width, 16)
+	if len(rows) < 3 {
+		t.Fatalf("CPU 面板只出了 %d 行", len(rows))
+	}
+	top := plain(rows[1])
+	want := "│ " + strings.Repeat("⣿", graphW)
+	if !strings.HasPrefix(top, want) {
+		t.Fatalf("120 点满历史没有铺满 CPU 图宽 %d（左侧仍在永久补零）：\n%s", graphW, plainPage(rows))
 	}
 }
 

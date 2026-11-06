@@ -765,7 +765,7 @@ func (m Model) cpuPanel(w, h int) []string {
 	// 高度够时把右栏包进「核心」子线框，和 btop 的多核区域一致。
 	if gw, dw, ok := splitColumns(innerW, 46, 20); ok {
 		// 历史曲线用固定颜色：不能因为当前占用跨过阈值就把过去两分钟整段换色。
-		slots := gw * 2
+		slots := historySlots(gw)
 		graph := chart.FillMirror(tailHist(m.hist.cpu.all(), slots), tailHist(m.hist.coreMax.all(), slots), slots, gw, innerH,
 			100, 100, chart.SeriesBlue, chart.SeriesCyan)
 		if innerH >= 8 && dw >= 24 {
@@ -796,7 +796,7 @@ func (m Model) cpuPanel(w, h int) []string {
 	}
 	lines := make([]string, 0, innerH)
 	if canvasH > 0 {
-		slots := innerW * 2
+		slots := historySlots(innerW)
 		lines = append(lines, chart.FillMirror(tailHist(m.hist.cpu.all(), slots), tailHist(m.hist.coreMax.all(), slots), slots, innerW, canvasH,
 			100, 100, chart.SeriesBlue, chart.SeriesCyan)...)
 	}
@@ -826,7 +826,7 @@ func (m Model) cpuExpandedPanel(w, h int) []string {
 	if !ok {
 		return m.cpuPanel(w, h)
 	}
-	slots := gw * 2
+	slots := historySlots(gw)
 	graph := chart.FillMirror(tailHist(m.hist.cpu.all(), slots), tailHist(m.hist.coreMax.all(), slots), slots, gw, innerH,
 		100, 100, chart.SeriesBlue, chart.SeriesCyan)
 	border, titleStyle := frameTheme("核心")
@@ -979,7 +979,7 @@ func (m Model) coreColumnsSized(width, maxRows, graphH int) (lines []string, hid
 			prefixW := lipgloss.Width(chart.Text.Render(fmt.Sprintf("C%-2d", idx)) + " ")
 			suffixW := lipgloss.Width(" " + chart.PctStyle(v).Render(fmt.Sprintf("%3d%%", chart.PctValue(v))))
 			graphW := max(colW-prefixW-suffixW, 4)
-			slots := max(graphW*2, 4)
+			slots := historySlots(graphW)
 			graph := chart.Fill(tailHist(hist, slots), slots, graphW, graphH, 0, 100, chart.SeriesBlue)
 			cells[c] = make([]string, graphH)
 			for gy := 0; gy < graphH; gy++ {
@@ -1079,7 +1079,7 @@ func (m Model) memPanel(w, h int) []string {
 	}
 	lines := make([]string, 0, innerH)
 	if graphH > 0 {
-		slots := innerW * 2
+		slots := historySlots(innerW)
 		lines = append(lines, chart.Fill(tailHist(m.hist.mem.all(), slots), slots, innerW, graphH,
 			0, 100, chart.SeriesBlue)...)
 	}
@@ -1127,7 +1127,7 @@ func (m Model) netPanel(w, h int) []string {
 
 	// 宽屏按 btop：左边是镜像曲线，右边是独立的「速率」子框。
 	if gw, dw, ok := splitColumns(innerW, 30, 24); ok && innerH >= 7 {
-		slots := gw * 2
+		slots := historySlots(gw)
 		graph := chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, gw, innerH,
 			100, 100, chart.SeriesCyan, chart.SeriesBlue)
 		if box := m.netStatsBox(dw, innerH); box != nil {
@@ -1144,7 +1144,7 @@ func (m Model) netPanel(w, h int) []string {
 		graphH = innerH - 4
 	}
 	if graphH > 0 {
-		slots := innerW * 2
+		slots := historySlots(innerW)
 		lines = append(lines, chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, innerW, graphH,
 			100, 100, chart.SeriesCyan, chart.SeriesBlue)...)
 	}
@@ -1244,7 +1244,7 @@ func (m Model) netExpandedPanel(w, h int) []string {
 	if !ok {
 		return m.netPanel(w, h)
 	}
-	slots := gw * 2
+	slots := historySlots(gw)
 	graph := chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, gw, innerH,
 		100, 100, chart.SeriesCyan, chart.SeriesBlue)
 	box := m.netExpandedStatsBox(dw, innerH)
@@ -1299,9 +1299,16 @@ func (m Model) netExpandedStatsBox(w, h int) []string {
 	return chart.FrameColored("速率", "", lines, w, h, border, titleStyle)
 }
 
+// historySlots 返回历史图在指定字符宽度下的横轴槽位数。宽度足够时一个采样占一个
+// braille 点列；宽度超过固定 120 点历史所需时，改为把完整两分钟历史铺满画布，
+// 不能再向左侧补零，否则超出的那片区域会永久静止。
+func historySlots(graphWidth int) int {
+	return max(min(graphWidth*2, HistoryLen), 1)
+}
+
 // tailHist 取最近 n 个样本并在前面补 0，返回恰好 n 个 slot。
-// 主图和每核小图都用它把历史对齐到点列宽度：一个采样恰好占一个 braille 点列，
-// 新样本并入时旧图整体左移一列，不会因插值步长变化被重新量化。
+// 历史不足时用 0 基线从右侧生长；历史已满且画布更宽时，
+// historySlots 会把固定 120 点重新映射到整张画布，而不是让左侧永久补零。
 func tailHist(v []float64, n int) []float64 {
 	if n <= 0 {
 		return nil
@@ -1387,7 +1394,7 @@ func (m Model) diskPanel(w, h int) []string {
 	}
 	lines := make([]string, 0, innerH)
 	if graphH > 0 {
-		slots := innerW * 2
+		slots := historySlots(innerW)
 		lines = append(lines, chart.FillMirror(tailHist(m.hist.readPlot.all(), slots), tailHist(m.hist.writePlot.all(), slots), slots, innerW, graphH,
 			100, 100, chart.SeriesCyan, chart.SeriesBlue)...)
 	}
@@ -1615,14 +1622,14 @@ func (m Model) usagePanel(p providerSnapshot, w, h int) []string {
 		if p.severity >= 2 {
 			st = chart.Red
 		}
-		lines := []string{st.Render(chart.ClampTo(p.notice, innerW))}
-		if innerH >= 2 {
-			lines = append(lines, chart.Dim.Render("点击面板重试"))
+		messages := []string{st.Render(chart.ClampTo(p.notice, innerW))}
+		if p.retryIn > 0 {
+			messages = append(messages, chart.Dim.Render(fmt.Sprintf("%ds 后重试", p.retryIn)))
 		}
-		for len(lines) < innerH {
-			lines = append(lines, "")
+		if p.severity > 0 && !p.retrying {
+			messages = append(messages, chart.Dim.Render("点击面板重试"))
 		}
-		return framed(title, "", lines[:min(len(lines), innerH)], w, h)
+		return framed(title, "", centerPanelMessages(innerW, innerH, messages...), w, h)
 	}
 	if len(p.windows) == 0 {
 		return framed(title, "[--]", []string{chart.Dim.Render("[--]")}, w, h)
@@ -1690,6 +1697,25 @@ func (m Model) usagePanel(p providerSnapshot, w, h int) []string {
 			chart.MeterH(win.percent, meterW, chart.PctStyle(win.percent))+" "+nums)
 	}
 	return framed(title, value, lines[:min(len(lines), innerH)], w, h)
+}
+
+// centerPanelMessages 把短状态按可见宽度水平居中，并作为一个整体在面板内容区垂直居中。
+// ANSI 样式在计算宽度时不占字符，边框绘制前由 FrameColored 统一补满。
+func centerPanelMessages(width, height int, messages ...string) []string {
+	lines := make([]string, max(height, 0))
+	if width <= 0 || height <= 0 || len(messages) == 0 {
+		return lines
+	}
+	if len(messages) > height {
+		messages = messages[:height]
+	}
+	start := (height - len(messages) + 1) / 2
+	for i, msg := range messages {
+		msg = chart.ClampTo(msg, width)
+		gap := max(width-lipgloss.Width(msg), 0)
+		lines[start+i] = strings.Repeat(" ", gap/2) + msg + strings.Repeat(" ", gap-gap/2)
+	}
+	return lines
 }
 
 // compactLines 是紧凑模式：每面板 1 行数值、无线框，按 CPU/内存/网络/磁盘/用量 的顺序。

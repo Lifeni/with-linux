@@ -41,8 +41,7 @@ const (
 	PanelCmdCode  = "commandcode"
 )
 
-// tickMsg 是本包私有的每秒 tick。与 usage／cmdusage 各自的 tick 类型不同，
-// 三条 tick 链互不串台（沿用现有做法）。
+// tickMsg 是本包私有的每秒 tick；它同时驱动系统采样、AI 倒计时与自动重试。
 type tickMsg time.Time
 
 type dockerTickMsg time.Time
@@ -214,7 +213,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tickMsg:
 		m.now = time.Now()
 		m.sampleOnce()
-		return m, tickCmd()
+		um, uc := m.usage.Tick(m.now)
+		cm, cc := m.cmdUsage.Tick(m.now)
+		m.usage, m.cmdUsage = um, cm
+		return m, tea.Batch(tickCmd(), uc, cc)
 	case dockerTickMsg:
 		next := dockerTickCmd()
 		if m.docker == nil || m.dockerFetch {
@@ -538,6 +540,8 @@ type providerSnapshot struct {
 	status   string
 	short    string
 	severity int
+	retrying bool
+	retryIn  int
 	windows  []winView
 }
 
@@ -548,14 +552,14 @@ func (m Model) providers() []providerSnapshot {
 		s := m.usage.Snapshot()
 		out = append(out, providerSnapshot{
 			id: PanelOpenCode, title: "OpenCode Go 用量", notice: s.Notice, status: s.Status, short: s.Short,
-			severity: s.Severity, windows: openCodeWindows(s, m.now),
+			severity: s.Severity, retrying: s.Retrying, retryIn: s.RetryIn, windows: openCodeWindows(s, m.now),
 		})
 	}
 	if m.showCC {
 		s := m.cmdUsage.Snapshot()
 		out = append(out, providerSnapshot{
 			id: PanelCmdCode, title: "Command Code", notice: s.Notice, status: s.Status, short: s.Short,
-			severity: s.Severity, windows: cmdCodeWindows(s, m.now),
+			severity: s.Severity, retrying: s.Retrying, retryIn: s.RetryIn, windows: cmdCodeWindows(s, m.now),
 		})
 	}
 	return out

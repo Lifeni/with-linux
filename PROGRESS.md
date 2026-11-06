@@ -1148,3 +1148,44 @@ ok  	with-linux/internal/app	0.093s
 - 推送 `main` 与标签 `v0.5.2`；GitHub Actions Release 工作流 run `39739757799` 成功，用时 51 秒。
 - Release：[with-linux v0.5.2](https://github.com/Lifeni/with-linux/releases/tag/v0.5.2)，包含 amd64/arm64 的 tar.gz/deb/rpm 与 `checksums.txt`。
 - 本地正式包 `dist/with-linux_0.5.2_arm64.deb` 覆盖安装成功：`wl 0.5.2`，安装二进制与包内 SHA-256 同为 `b6e590f0…`，`dpkg -V` 无差异。
+
+## 2026-10-29 · M37：宽屏历史图永久补零修复
+
+### 实现
+
+- 复现链路：终端加宽后 CPU 图槽位为 `图宽 × 2`；主历史环只保留 120 点，`tailHist` 把不足部分永久补零，导致约 120 列之后的左侧区域始终静止，只有右侧继续变化。
+- 新增 `historySlots(graphWidth)`：槽位取 `min(图宽 × 2, HistoryLen)`。画布不超过 120 个点列时仍一个采样占一个点列；更宽时把固定 120 点历史映射到整张画布。
+- CPU 主面板、CPU 放大态、每核小图、内存、网络和磁盘的历史图统一改为使用该函数，避免其它宽图出现同类永久补零。
+- 历史数据本身仍固定保留 120 点、高度仍按进入历史时的值冻结，没有扩大环形缓冲或改写既有采样。
+
+### 验证
+
+- 新增 `TestHistorySlotsCapAtFullHistory`：窄图逐点列扩展，达到 120 点容量后不再继续增长。
+- 新增 `TestWideCPUHistoryFillsWholeGraphWidth`：180 格宽、120 点满历史的 CPU 顶行从图区左边缘起完整填充；旧实现会在左侧留下永久补零区。
+- `go test -count=1 ./...`：沙箱外全量 13 个测试包通过（本地测试需要监听 TCP/Unix socket）。
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接。
+- 本机为 RK3588 39 位用户地址空间；`go test -race` 仍被 ThreadSanitizer 以 `unsupported VMA range` 拒绝，属工具链环境限制，race 继续由 GitHub Actions 的 amd64 runner 覆盖。
+- 生成并覆盖安装 `dist/with-linux_0.5.3~dev_arm64.deb`：`dpkg` 状态为 `0.5.3~dev arm64 install ok installed`，`wl --version` → `wl 0.5.3~dev`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `bc1d89ab…`，`dpkg -V with-linux` 无差异。
+- 安装版本在 180×30 tmux 会话启动成功：CPU/内存/磁盘/网络/Docker/Caddy 均渲染；发送 `q` 后会话退出。
+
+## 2026-11-06 · M38：AI 自动重试与倒计时反馈
+
+### 实现
+
+- OpenCode Go 与 Command Code 不再各自维护独立 `tea.Tick` 链；系统页每秒 tick 同时推进两个用量模型的倒计时，并在到期时启动自动取数。取数请求、60 秒成功轮询与 10 秒失败重试仍沿用原策略。
+- 失败等待态在 AI 面板内容区居中显示三行：短错误文案、`Ns 后重试`、`点击面板重试`。请求进行期间改为单行居中的「正在重试…」，点击重试也走同一状态。
+- 点击 AI 面板仍会立即取消旧请求、重读配置并发起新请求；状态快照新增 `Retrying` / `RetryIn`，渲染层不再把检索中的旧错误当成静止错误文案。
+
+### 验证
+
+- `TestFailedFetchShowsCountdownAndRetriesOnTick`（OpenCode／Command Code 各一）：失败后快照为 `连接失败 + RetryIn=7`，到期 tick 返回取数命令并切换为 `正在重试…`。
+- `TestClickRetryShowsRetryingImmediately`（两提供商各一）：`RefreshMsg` 立即返回取数命令，快照为 `Retrying=true`、`Notice=正在重试…`。
+- `TestUsagePanelWindowsAndDegradation`：错误面板的三行文案均在内容区水平居中，并确认重试态只显示「正在重试…」。
+- 既有 app 点击测试继续通过：点击 AI 面板返回取数命令且不打开弹窗。
+- `go test -count=1 ./...`：沙箱外全量测试包通过（本地测试需要监听 TCP/Unix socket）。
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接，`ldd` 均为 `not a dynamic executable`。
+- 本机为 RK3588 39 位用户地址空间；`go test -race` 仍被 ThreadSanitizer 以 `unsupported VMA range`（Found 39 / Supported 48）拒绝，race 继续由 GitHub Actions 的 amd64 runner 覆盖。
+- 生成并覆盖安装 `dist/with-linux_0.5.3~dev_arm64.deb`：`dpkg` 状态为 `0.5.3~dev arm64 install ok installed`，`wl --version` → `wl 0.5.3~dev`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `676f1288a457761f4b56038f80d00d552be23c4474145424df7dd7b4e6ff1159`，`dpkg -V with-linux` 无差异。
+- 安装版本在 180×30 tmux 会话启动成功：真实 Command Code 网络失败面板中央显示「连接失败 / 9s 后重试 / 点击面板重试」，其余系统、Docker、Caddy 面板正常渲染；发送 `q` 后会话退出。

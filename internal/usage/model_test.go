@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"github.com/Lifeni/with-linux/internal/config"
 )
 
-func TestNewStartsInitialFetchWithoutDuplicateTickLoop(t *testing.T) {
+func TestNewStartsInitialFetchWithoutProviderTickLoop(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	if err := config.Save("oc_sk_fake_key_for_tests_0123"); err != nil {
 		t.Fatal(err)
@@ -30,7 +31,7 @@ func TestNewStartsInitialFetchWithoutDuplicateTickLoop(t *testing.T) {
 		t.Fatalf("初始状态 = %q, want 查询中…", text)
 	}
 	if cmd := m.Init(); cmd == nil {
-		t.Fatal("Init 未返回初始取数与 tick 命令")
+		t.Fatal("Init 未返回初始取数命令")
 	}
 }
 
@@ -91,7 +92,7 @@ func TestTickStartsOverdueFetch(t *testing.T) {
 	m.now = time.Now()
 	m.nextFetchAt = m.now.Add(-time.Second)
 
-	nm, cmd := m.Update(tickMsg(m.now))
+	nm, cmd := m.Tick(m.now)
 	if cmd == nil {
 		t.Fatal("到期 tick 未返回命令")
 	}
@@ -100,6 +101,60 @@ func TestTickStartsOverdueFetch(t *testing.T) {
 	}
 	if nm.fetchID != m.fetchID+1 {
 		t.Fatalf("到期 tick 后 fetchID = %d, want %d", nm.fetchID, m.fetchID+1)
+	}
+}
+
+func TestFailedFetchShowsCountdownAndRetriesOnTick(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	now := time.Now()
+	m := Model{
+		hasKey:      true,
+		lastError:   ErrNetwork,
+		nextFetchAt: now.Add(7 * time.Second),
+		now:         now,
+		apiKey:      "oc_sk_fake_key_for_tests_0123",
+		url:         "http://127.0.0.1:1/usage",
+		client:      &http.Client{Timeout: time.Second},
+	}
+	snap := m.Snapshot()
+	if snap.Notice != "连接失败" || snap.RetryIn != 7 || snap.Retrying {
+		t.Fatalf("失败快照 = %+v, want 连接失败 / 7s / 未重试中", snap)
+	}
+
+	nm, cmd := m.Tick(now.Add(7 * time.Second))
+	if cmd == nil || !nm.fetching {
+		t.Fatal("倒计时到期后没有自动启动重试")
+	}
+	if nm.cancel != nil {
+		defer nm.cancel()
+	}
+	snap = nm.Snapshot()
+	if snap.Notice != "正在重试…" || !snap.Retrying || snap.RetryIn != 0 {
+		t.Fatalf("重试中快照 = %+v, want 正在重试… / retrying / 无倒计时", snap)
+	}
+}
+
+func TestClickRetryShowsRetryingImmediately(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := config.Save("oc_sk_fake_key_for_tests_0123"); err != nil {
+		t.Fatal(err)
+	}
+	m := Model{
+		lastError:   ErrNetwork,
+		nextFetchAt: time.Now().Add(7 * time.Second),
+		now:         time.Now(),
+	}
+	nm, cmd := m.Update(RefreshMsg{})
+	if cmd == nil {
+		t.Fatal("点击重试没有启动取数")
+	}
+	if nm.cancel != nil {
+		defer nm.cancel()
+	}
+	snap := nm.Snapshot()
+	if snap.Notice != "正在重试…" || !snap.Retrying || snap.RetryIn != 0 {
+		t.Fatalf("点击重试后的快照 = %+v, want 正在重试… / retrying / 无倒计时", snap)
 	}
 }
 

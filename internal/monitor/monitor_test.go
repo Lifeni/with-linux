@@ -225,7 +225,7 @@ func TestUpdateTickSamplesAndRearms(t *testing.T) {
 	if next.sampleErr == nil {
 		t.Error("Root 下没有 proc，这次采样应当报错")
 	}
-	// 非 tick 消息要转发给两个用量子模型（它们自己的 tick / 取数完成 / 光标闪烁都走这条路）
+	// 非 tick 消息要转发给两个用量子模型（取数完成与手动刷新都走这条路）
 	if _, cmd := next.Update(usage.RefreshMsg{}); cmd == nil {
 		t.Error("RefreshMsg 没转发给用量子模型：应当产出取数命令")
 	}
