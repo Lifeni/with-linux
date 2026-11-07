@@ -1212,3 +1212,13 @@ ok  	with-linux/internal/app	0.093s
 - `go test -race` 仍因本机 RK3588 为 39 位用户地址空间而报 ThreadSanitizer `unsupported VMA range`（Found 39 / Supported 48），继续由 GitHub Actions amd64 runner 覆盖。
 - 生成并覆盖安装 `dist/with-linux_0.5.3~dev_arm64.deb`：`dpkg` 状态为 `0.5.3~dev arm64 install ok installed`，`wl --version` → `wl 0.5.3~dev`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `2ca47ba699e354d99dde642bf4ad671598f3e7813dbd4c1abba3aedd44c1d222`，`dpkg -V with-linux` 无差异。
 - 安装版本在 180×30 tmux 会话启动成功：系统、Docker、Caddy 正常渲染；发送 `q` 后会话退出。
+
+## 2026-11-07 · v0.5.3 发布
+
+- CHANGELOG 将 M37–M39 的未发布变化定版为 `0.5.3`；PLAN 状态更新为 `v0.5.3`。
+- 发布前本地检查通过：全量测试、gofmt、`go mod tidy -diff`、vet、双架构静态构建与 `git diff --check`。
+- 推送 `main` 与标签 `v0.5.3`；GitHub Actions CI run `42372381277` 成功，Release 工作流 run `42372408780` 成功。
+- Release：[with-linux v0.5.3](https://github.com/Lifeni/with-linux/releases/tag/v0.5.3)，包含 amd64/arm64 的 tar.gz/deb/rpm 与 `checksums.txt`。
+- 下载正式 `dist/with-linux_0.5.3_arm64.deb`：Release checksum 为 `a9be090c98b4e2c0d4287e8735026095f358061165a0dce4f0f23f319076777f`，本地 SHA-256 一致。
+- 正式包覆盖安装成功：`wl 0.5.3`；包内 `/usr/bin/wl` 与已安装二进制 SHA-256 同为 `be734bea706ce7846b388558a66548bfa2071da23db9c7e0a5217d4c39a9afab`，`dpkg -V` 无差异。
+- 安装版本在 180×30 tmux 会话启动成功，标题栏与系统状态页正常渲染；发送 `q` 后会话退出。
