@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-07
+
 ### Changed
 
 - AI 用量错误态改为居中显示自动重试倒计时；点击或自动开始重试后立即显示「正在重试…」。
@@ -183,6 +185,7 @@
 - 配置：`$XDG_CONFIG_HOME/with-linux/config.json`（默认 `~/.config/with-linux/config.json`），`apiKey` 字段
 - 交付：单一可执行文件，全静态交叉编译 `linux/amd64` ＋ `linux/arm64`
 
+[0.5.3]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.3
 [0.5.2]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.2
 [0.5.1]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.1
 [0.5.0]: https://github.com/Lifeni/with-linux/releases/tag/v0.5.0
