@@ -27,8 +27,8 @@ func TestNewStartsInitialFetchWithoutProviderTickLoop(t *testing.T) {
 	if m.nextFetchAt.IsZero() {
 		t.Fatal("New 后未设置 nextFetchAt")
 	}
-	if text, _ := m.StatusText(); text != "查询中…" {
-		t.Fatalf("初始状态 = %q, want 查询中…", text)
+	if text, _ := m.StatusText(); text != "正在加载…" {
+		t.Fatalf("初始状态 = %q, want 正在加载…", text)
 	}
 	if cmd := m.Init(); cmd == nil {
 		t.Fatal("Init 未返回初始取数命令")

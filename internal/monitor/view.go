@@ -296,7 +296,7 @@ func (m Model) dockerBodyCount() int {
 	}
 	n := len(m.dockerSnap.Containers)
 	if n == 0 {
-		n = 1 // “无容器”
+		n = 1 // “暂无容器”
 	}
 	if _, ok := m.dockerSnap.BusiestCPU(); ok {
 		n++
@@ -310,7 +310,7 @@ func (m Model) caddyBodyCount() int {
 	}
 	n := max(len(m.caddySnap.Domains), len(m.caddySnap.Upstreams))
 	if len(m.caddySnap.Domains) == 0 {
-		n++ // “未解析到域名”
+		n++ // “暂无域名”
 	}
 	return n + 2 // API 与配置文件
 }
@@ -330,11 +330,11 @@ func caddyListRows(innerH int) int {
 func (m Model) dockerSummary(width int) string {
 	title := chart.Title.Render("Docker")
 	if !m.dockerLoaded {
-		return chart.FitFields([]string{title, chart.Dim.Render("查询中…")}, " · ", width)
+		return chart.FitFields([]string{title, chart.Dim.Render("加载中…")}, " · ", width)
 	}
 	s := m.dockerSnap
 	if s.Err != nil {
-		return chart.FitFields([]string{title, chart.Red.Render("不可达"), chart.Dim.Render(shortError(s.Err))}, " · ", width)
+		return chart.FitFields([]string{title, chart.Red.Render("不可达")}, " · ", width)
 	}
 	state := chart.Green.Render("●") + " " + fmt.Sprintf("%d/%d 运行", s.Running, s.Total)
 	fields := []string{title, state, chart.Dim.Render("CPU " + chart.Pct(s.CPUPercent)), chart.Dim.Render("内存 " + chart.Bytes(float64(s.MemUsage)))}
@@ -347,7 +347,7 @@ func (m Model) dockerSummary(width int) string {
 func (m Model) caddySummary(width int) string {
 	title := chart.Title.Render("Caddy")
 	if !m.caddyLoaded {
-		return chart.FitFields([]string{title, chart.Dim.Render("查询中…")}, " · ", width)
+		return chart.FitFields([]string{title, chart.Dim.Render("加载中…")}, " · ", width)
 	}
 	s := m.caddySnap
 	if !s.Reachable {
@@ -462,6 +462,12 @@ func framed(title, value string, lines []string, w, h int) []string {
 		out[0] = chart.ClampTo(chart.Title.Render(title)+" "+chart.Text.Render(value), w)
 	}
 	return out
+}
+
+// centeredPanel 渲染只有整块状态提示的面板：提示作为一个短消息组居中。
+func centeredPanel(title, value string, w, h int, messages ...string) []string {
+	innerW, innerH := innerSize(w, h)
+	return framed(title, value, centerPanelMessages(innerW, innerH, messages...), w, h)
 }
 
 // splitColumns 决定面板内部要不要做「左图右明细」：明细列按面板实际需要给宽度
@@ -759,7 +765,11 @@ func (m Model) cpuPanel(w, h int) []string {
 	}
 	title := m.cpuTitle(value, w)
 	if !cpu.HasData && len(cpu.PerCore) == 0 {
-		return framed(title, value, []string{chart.Dim.Render("[--]")}, w, h)
+		notice := chart.Dim.Render("正在采样…")
+		if m.sampleErr != nil {
+			notice = chart.Red.Render("读取失败")
+		}
+		return centeredPanel(title, value, w, h, notice)
 	}
 	// 宽屏：左边上下镜像面积图，右边「用量条 ＋ 两列多核 ＋ 温度/负载」。
 	// 高度够时把右栏包进「核心」子线框，和 btop 的多核区域一致。
@@ -802,7 +812,7 @@ func (m Model) cpuPanel(w, h int) []string {
 	}
 	lines = append(lines, coreLines...)
 	if note != "" {
-		lines = append(lines, chart.Dim.Render(chart.ClampTo(note, innerW)))
+		lines = append(lines, centerPanelMessages(innerW, 1, chart.Dim.Render(note))...)
 	}
 	lines = append(lines, stats...)
 	return framed(title, value, lines, w, h)
@@ -1004,7 +1014,8 @@ func (m Model) coreColumnsSized(width, maxRows, graphH int) (lines []string, hid
 		}
 	}
 	if withNote {
-		lines = append(lines, chart.Dim.Render(chart.ClampTo(fmt.Sprintf("＋%d 核未显示", hidden), width)))
+		lines = append(lines, centerPanelMessages(width, 1,
+			chart.Dim.Render(fmt.Sprintf("＋%d 核未显示", hidden)))...)
 	}
 	return lines, hidden
 }
@@ -1034,7 +1045,7 @@ func (m Model) memPanel(w, h int) []string {
 	mem := m.sample.Mem
 	innerW, innerH := innerSize(w, h)
 	if !mem.HasData {
-		return framed("内存", "[--]", []string{chart.Dim.Render("[--]")}, w, h)
+		return centeredPanel("内存", "[--]", w, h, chart.Dim.Render("暂无数据"))
 	}
 	value := chart.Bytes(float64(mem.Used)) + "/" + chart.Bytes(float64(mem.Total)) + " " + chart.Pct(mem.UsePct())
 	pctOf := func(v uint64) float64 {
@@ -1100,7 +1111,7 @@ func (m Model) netPanel(w, h int) []string {
 	innerW, innerH := innerSize(w, h)
 	n := primaryNet(m.sample)
 	if n == nil {
-		return framed("网络", "[--]", []string{chart.Dim.Render("[--]")}, w, h)
+		return centeredPanel("网络", "[--]", w, h, chart.Dim.Render("暂无数据"))
 	}
 	rate := func(v float64) string {
 		if !n.HasRate {
@@ -1337,7 +1348,7 @@ func (m Model) diskPanel(w, h int) []string {
 		}
 	}
 	if d == nil && len(mounts) == 0 {
-		return framed(title, "[--]", []string{chart.Dim.Render("[--]")}, w, h)
+		return centeredPanel(title, "[--]", w, h, chart.Dim.Render("暂无数据"))
 	}
 	if innerH < 2 {
 		line := chart.FitFields([]string{chart.Title.Render("磁盘"), chart.Text.Render(value)}, " ", innerW)
@@ -1439,17 +1450,14 @@ func mountBlock(mt sysstat.Mount) statBlock {
 func (m Model) dockerPanel(w, h int) []string {
 	innerW, innerH := innerSize(w, h)
 	if !m.dockerLoaded {
-		lines := finishPanel([]string{
-			chart.Dim.Render("容器    查询中…"),
-			chart.Dim.Render("CPU     [--]"),
-			chart.Dim.Render("内存    [--]"),
-		}, innerW, innerH, "")
-		return framed("Docker", "查询中…", lines, w, h)
+		return centeredPanel("Docker", "[--]", w, h, chart.Dim.Render("正在加载…"))
 	}
 	s := m.dockerSnap
 	if s.Err != nil {
-		lines := finishPanel([]string{chart.Red.Render("Docker 不可达"), chart.Dim.Render(shortError(s.Err))}, innerW, innerH, "")
-		return framed("Docker", "不可达", lines, w, h)
+		return centeredPanel("Docker", "不可达", w, h,
+			chart.Red.Render(dockerUnavailableText(s.Err)),
+			chart.Dim.Render("检查 Docker 服务"),
+		)
 	}
 	lines := metricRows([]metricCell{
 		{label: "CPU", value: chart.Pct(s.CPUPercent), style: chart.Dim},
@@ -1458,7 +1466,7 @@ func (m Model) dockerPanel(w, h int) []string {
 	// 名称列吃掉剩余宽度，最右侧放状态（UP/EXIT），不留空。
 	nameW := max(innerW-25, 6)
 	// 高度够时加列头，和 btop 的进程表一样把各列含义写清楚。
-	if innerH >= 10 {
+	if innerH >= 10 && len(s.Containers) > 0 {
 		lines = append(lines, dockerHeader(nameW))
 	}
 
@@ -1490,7 +1498,9 @@ func (m Model) dockerPanel(w, h int) []string {
 			stateStyle.Render(fmt.Sprintf("%7s", c.ShortState())))
 	}
 	if len(s.Containers) == 0 {
-		body = append(body, chart.Dim.Render("无容器"))
+		remaining := max(innerH-len(lines), 0)
+		lines = append(lines, centerPanelMessages(innerW, remaining, chart.Dim.Render("暂无容器"))...)
+		return framed("Docker", "0/0", lines, w, h)
 	}
 	if c, ok := s.BusiestCPU(); ok {
 		body = append(body, metricLine(metricCell{
@@ -1515,26 +1525,36 @@ func dockerHeader(nameW int) string {
 		right("CPU", 5) + " " + right("内存", 8) + " " + right("状态", 7))
 }
 
+// dockerUnavailableText 把底层连接错误收成一句面板内可读的短文案。
+// 完整错误保留在点击卡片打开的管理弹窗里。
+func dockerUnavailableText(err error) string {
+	if err == nil {
+		return "无法连接 Docker"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "no such file"), strings.Contains(msg, "not exist"):
+		return "未找到 Docker 连接"
+	case strings.Contains(msg, "permission denied"), strings.Contains(msg, "operation not permitted"):
+		return "无权限连接 Docker"
+	case strings.Contains(msg, "connection refused"):
+		return "Docker 服务未运行"
+	default:
+		return "无法连接 Docker"
+	}
+}
+
 func (m Model) caddyPanel(w, h int) []string {
 	innerW, innerH := innerSize(w, h)
 	if !m.caddyLoaded {
-		lines := finishPanel([]string{
-			chart.Dim.Render("管理 API  查询中…"),
-			chart.Dim.Render("路由      [--]"),
-			chart.Dim.Render("上游      [--]"),
-			chart.Dim.Render("域名      [--]"),
-		}, innerW, innerH, "")
-		return framed("Caddy", "查询中…", lines, w, h)
+		return centeredPanel("Caddy", "[--]", w, h, chart.Dim.Render("正在加载…"))
 	}
 	s := m.caddySnap
 	if !s.Reachable {
-		body := []string{chart.Red.Render("管理 API 不可达")}
-		if s.Err != nil {
-			body = append(body, chart.Dim.Render(shortError(s.Err)))
-		}
-		body = append(body, chart.Dim.Render("systemctl status caddy"))
-		lines := finishPanel(body, innerW, innerH, "")
-		return framed("Caddy", "不可达", lines, w, h)
+		return centeredPanel("Caddy", "不可达", w, h,
+			chart.Red.Render("无法连接 Caddy"),
+			chart.Dim.Render("检查 systemctl status caddy"),
+		)
 	}
 	leftW := max((innerW-3)/2, 8)
 	rightW := max(innerW-3-leftW, 8)
@@ -1575,7 +1595,7 @@ func (m Model) caddyPanel(w, h int) []string {
 		body = append(body, twoColumnLine(left, right, leftW, rightW))
 	}
 	if len(s.Domains) == 0 {
-		body = append(body, chart.Dim.Render("未解析到域名"))
+		body = append(body, centerPanelMessages(innerW, 1, chart.Dim.Render("暂无域名"))...)
 	}
 	body = append(body,
 		metricLine(metricCell{label: "API", value: s.AdminURL, style: chart.Dim}, innerW),

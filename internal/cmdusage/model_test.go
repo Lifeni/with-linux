@@ -24,8 +24,8 @@ func TestNewStartsInitialFetch(t *testing.T) {
 	if m.fetchID != 1 {
 		t.Fatalf("初始 fetchID = %d, want 1", m.fetchID)
 	}
-	if text, _ := m.StatusText(); text != "查询中…" {
-		t.Fatalf("初始状态 = %q, want 查询中…", text)
+	if text, _ := m.StatusText(); text != "正在加载…" {
+		t.Fatalf("初始状态 = %q, want 正在加载…", text)
 	}
 	if cmd := m.Init(); cmd == nil {
 		t.Fatal("Init 未返回命令")
@@ -164,8 +164,8 @@ func TestMissingAndBrokenConfig(t *testing.T) {
 func TestSnapshotWithKeyButNoData(t *testing.T) {
 	m := Model{hasKey: true, now: time.Now(), configPath: config.Path()}
 	snap := m.Snapshot()
-	if snap.Notice != "查询中…" {
-		t.Fatalf("首帧未到时面板提示 = %q, want 查询中…", snap.Notice)
+	if snap.Notice != "正在加载…" {
+		t.Fatalf("首帧未到时面板提示 = %q, want 正在加载…", snap.Notice)
 	}
 	for i, w := range snap.Windows {
 		if w != nil {

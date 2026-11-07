@@ -186,7 +186,7 @@ func (m Model) ShortStatusText() string {
 		return shortError(m.lastError)
 	}
 	if m.fetching {
-		return "查询中"
+		return "加载中"
 	}
 	if m.lastFetchAt.IsZero() {
 		return "待刷新"
@@ -229,7 +229,7 @@ func (m Model) StatusText() (text string, severity int) {
 		return fmt.Sprintf("%s · %ds 后重试", ErrorText(m.lastError), refreshSeconds(m.nextFetchAt, m.now)), 2
 	}
 	if m.fetching {
-		return "查询中…", 0
+		return "正在加载…", 0
 	}
 	if m.lastFetchAt.IsZero() {
 		return "待刷新", 0

@@ -14,6 +14,56 @@ import (
 	"github.com/Lifeni/with-linux/internal/sysstat"
 )
 
+func panelTextMargins(lines []string, text string) (row, left, right int, ok bool) {
+	target := []rune(text)
+	for y, line := range lines {
+		runes := []rune(plain(line))
+		for i := 0; i+len(target) <= len(runes); i++ {
+			if string(runes[i:i+len(target)]) != text {
+				continue
+			}
+			left = lipgloss.Width(string(runes[:i])) - 2
+			right = lipgloss.Width(string(runes)) - lipgloss.Width(string(runes[:i])) - lipgloss.Width(text) - 2
+			return y, left, right, true
+		}
+	}
+	return 0, 0, 0, false
+}
+
+func assertPanelTextHorizontallyCentered(t *testing.T, lines []string, text string) {
+	t.Helper()
+	_, left, right, ok := panelTextMargins(lines, text)
+	if !ok {
+		t.Fatalf("面板中找不到 %q：\n%s", text, plainPage(lines))
+	}
+	delta := left - right
+	if delta < 0 {
+		delta = -delta
+	}
+	if left < 0 || right < 0 || delta > 1 {
+		t.Errorf("%q 没有水平居中：left=%d right=%d\n%s", text, left, right, plainPage(lines))
+	}
+}
+
+func assertCenteredPanelMessages(t *testing.T, lines []string, messages ...string) {
+	t.Helper()
+	if len(lines) < 2 || len(messages) == 0 {
+		t.Fatalf("面板高度或消息数不合法：lines=%d messages=%d", len(lines), len(messages))
+	}
+	bodyH := len(lines) - 2
+	start := 1 + (bodyH-len(messages)+1)/2
+	for i, msg := range messages {
+		row, _, _, ok := panelTextMargins(lines, msg)
+		if !ok {
+			t.Fatalf("面板中找不到 %q：\n%s", msg, plainPage(lines))
+		}
+		if row != start+i {
+			t.Errorf("%q 行号 = %d, want %d（消息组应垂直居中）", msg, row, start+i)
+		}
+		assertPanelTextHorizontallyCentered(t, lines, msg)
+	}
+}
+
 // TestLinesNeverWrap 是最重要的不变量：任何宽高、任何可见性组合下，
 // 每行可见宽度都不超过终端宽度（超了终端就会折行、三段式布局就散了）。
 func TestLinesNeverWrap(t *testing.T) {
@@ -211,8 +261,64 @@ func TestNoDataPage(t *testing.T) {
 	if !strings.Contains(page, "[--]") {
 		t.Errorf("无数据时应当显示 [--]：\n%s", page)
 	}
+	for _, want := range []string{"正在采样…", "暂无数据"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("无数据时缺少简洁状态 %q：\n%s", want, page)
+		}
+	}
 	if strings.Contains(page, "42%") {
 		t.Error("无数据时不该出现假数值")
+	}
+}
+
+func TestStatusOnlyPanelsUseCenteredSimpleMessages(t *testing.T) {
+	tests := []struct {
+		name   string
+		text   string
+		render func(Model) []string
+		setup  func(*Model)
+	}{
+		{
+			name: "CPU 首次采样", text: "正在采样…",
+			render: func(m Model) []string { return m.cpuPanel(40, 9) },
+			setup:  func(m *Model) { m.sample.CPU = sysstat.CPU{} },
+		},
+		{
+			name: "内存无数据", text: "暂无数据",
+			render: func(m Model) []string { return m.memPanel(40, 9) },
+			setup:  func(m *Model) { m.sample.Mem = sysstat.Memory{} },
+		},
+		{
+			name: "网络无数据", text: "暂无数据",
+			render: func(m Model) []string { return m.netPanel(40, 9) },
+			setup:  func(m *Model) { m.sample.Net = nil },
+		},
+		{
+			name: "磁盘无数据", text: "暂无数据",
+			render: func(m Model) []string { return m.diskPanel(40, 9) },
+			setup: func(m *Model) {
+				m.sample.Disk = nil
+				m.sample.Mount = nil
+			},
+		},
+		{
+			name: "Docker 加载中", text: "正在加载…",
+			render: func(m Model) []string { return m.dockerPanel(40, 9) },
+			setup:  func(m *Model) { m.dockerLoaded = false },
+		},
+		{
+			name: "Caddy 加载中", text: "正在加载…",
+			render: func(m Model) []string { return m.caddyPanel(40, 9) },
+			setup:  func(m *Model) { m.caddyLoaded = false },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := testModel(t, false, false)
+			tt.setup(&m)
+			assertCenteredPanelMessages(t, tt.render(m), tt.text)
+		})
 	}
 }
 
@@ -686,17 +792,40 @@ func TestNarrowLayoutHasServiceStrip(t *testing.T) {
 func TestServicePanelUnavailable(t *testing.T) {
 	m := testModel(t, false, false)
 	m.dockerLoaded = true
-	m.dockerSnap = docker.Snapshot{Err: errors.New("docker.sock 不可读")}
+	m.dockerSnap = docker.Snapshot{Err: errors.New("连接 Docker 失败：dial unix /var/run/docker.sock: connect: no such file or directory")}
 	m.caddyLoaded = true
 	m.caddySnap = caddy.Snapshot{Reachable: false, Err: errors.New("管理 API 不可达")}
 
-	d := plainPage(m.dockerPanel(30, 8))
-	if !strings.Contains(d, "不可达") || !strings.Contains(d, "docker.sock") {
-		t.Errorf("Docker 错误卡 = %s", d)
+	assertCenteredPanelMessages(t, m.dockerPanel(40, 9), "未找到 Docker 连接", "检查 Docker 服务")
+	assertCenteredPanelMessages(t, m.caddyPanel(40, 9), "无法连接 Caddy", "检查 systemctl status caddy")
+}
+
+func TestServiceEmptyStatesUseConciseCenteredNotice(t *testing.T) {
+	m := testModel(t, false, false)
+	m.dockerLoaded = true
+	m.dockerSnap = docker.Snapshot{}
+	assertPanelTextHorizontallyCentered(t, m.dockerPanel(46, 10), "暂无容器")
+
+	m.caddyLoaded = true
+	m.caddySnap = caddy.Snapshot{Reachable: true}
+	assertPanelTextHorizontallyCentered(t, m.caddyPanel(46, 12), "暂无域名")
+}
+
+func TestDockerUnavailableText(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{errors.New("dial unix /var/run/docker.sock: connect: no such file or directory"), "未找到 Docker 连接"},
+		{errors.New("connect: permission denied"), "无权限连接 Docker"},
+		{errors.New("connect: connection refused"), "Docker 服务未运行"},
+		{errors.New("unexpected failure"), "无法连接 Docker"},
+		{nil, "无法连接 Docker"},
 	}
-	c := plainPage(m.caddyPanel(30, 8))
-	if !strings.Contains(c, "不可达") || !strings.Contains(c, "systemctl") {
-		t.Errorf("Caddy 错误卡 = %s", c)
+	for _, tt := range tests {
+		if got := dockerUnavailableText(tt.err); got != tt.want {
+			t.Errorf("dockerUnavailableText(%v) = %q, want %q", tt.err, got, tt.want)
+		}
 	}
 }
 

@@ -1189,3 +1189,26 @@ ok  	with-linux/internal/app	0.093s
 - 本机为 RK3588 39 位用户地址空间；`go test -race` 仍被 ThreadSanitizer 以 `unsupported VMA range`（Found 39 / Supported 48）拒绝，race 继续由 GitHub Actions 的 amd64 runner 覆盖。
 - 生成并覆盖安装 `dist/with-linux_0.5.3~dev_arm64.deb`：`dpkg` 状态为 `0.5.3~dev arm64 install ok installed`，`wl --version` → `wl 0.5.3~dev`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `676f1288a457761f4b56038f80d00d552be23c4474145424df7dd7b4e6ff1159`，`dpkg -V with-linux` 无差异。
 - 安装版本在 180×30 tmux 会话启动成功：真实 Command Code 网络失败面板中央显示「连接失败 / 9s 后重试 / 点击面板重试」，其余系统、Docker、Caddy 面板正常渲染；发送 `q` 后会话退出。
+
+## 2026-11-07 · M39：其他面板状态提示居中与简化
+
+### 实现
+
+- 新增 `centeredPanel`，统一把整面板状态消息作为短消息组放在内容区中央。
+- CPU 首次采样居中显示「正在采样…」，整体读取失败显示红色「读取失败」；内存、网络、磁盘无数据时居中显示「暂无数据」，标题右上角仍保留 `[--]`。
+- Docker/Caddy 首次加载居中显示「正在加载…」；不可达时分别显示精简原因与「检查 Docker 服务」「检查 systemctl status caddy」。Docker 状态卡不再堆叠多行占位字段，完整技术错误仍在管理弹窗中。
+- Docker 无容器、Caddy 无域名分别居中显示「暂无容器」「暂无域名」；CPU「＋N 核未显示」也水平居中。
+- OpenCode／Command Code 首次加载及窄屏服务摘要的「查询中…」统一简化为「正在加载…」。
+
+### 验证
+
+- `TestStatusOnlyPanelsUseCenteredSimpleMessages`：覆盖 CPU、内存、网络、磁盘、Docker、Caddy 的六种整面板状态，逐项断言水平与垂直居中。
+- `TestServicePanelUnavailable`：Docker socket 缺失与 Caddy 不可达的两行提示均居中，且使用简化文案。
+- `TestServiceEmptyStatesUseConciseCenteredNotice`：断言「暂无容器」「暂无域名」在面板内水平居中。
+- `TestDockerUnavailableText`：覆盖 socket 缺失、权限不足、服务未运行、通用失败与 nil 五种映射。
+- `TestNoDataPage` 与 `TestLinesNeverWrap`：无数据页面仍显示短状态、不显示假数据，所有宽度/高度组合不折行。
+- `go test -count=1 ./...`：沙箱外全量测试包通过；`gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接，`ldd` 均为 `not a dynamic executable`。
+- `go test -race` 仍因本机 RK3588 为 39 位用户地址空间而报 ThreadSanitizer `unsupported VMA range`（Found 39 / Supported 48），继续由 GitHub Actions amd64 runner 覆盖。
+- 生成并覆盖安装 `dist/with-linux_0.5.3~dev_arm64.deb`：`dpkg` 状态为 `0.5.3~dev arm64 install ok installed`，`wl --version` → `wl 0.5.3~dev`，`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `2ca47ba699e354d99dde642bf4ad671598f3e7813dbd4c1abba3aedd44c1d222`，`dpkg -V with-linux` 无差异。
+- 安装版本在 180×30 tmux 会话启动成功：系统、Docker、Caddy 正常渲染；发送 `q` 后会话退出。
