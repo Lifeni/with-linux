@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// 与旧实现 usage-tui.js 一致的常量（FINDINGS.md §1.1–1.3）。
+// 与旧实现 usage-tui.js 一致的常量（docs/work/FINDINGS.md §1.1–1.3）。
 const (
 	UsageURL        = "https://opencode.ai/zen/go/v1/usage"
 	RequestTimeout  = 10 * time.Second
@@ -18,7 +18,7 @@ const (
 	FetchRetryDelay = 2 * time.Second  // 尝试间隔 2s
 )
 
-// 错误码（FINDINGS.md §1.2）。HTTP 非 2xx 的其余状态码为 "HTTP_<status>"。
+// 错误码（docs/work/FINDINGS.md §1.2）。HTTP 非 2xx 的其余状态码为 "HTTP_<status>"。
 const (
 	ErrNoKey       = "NO_KEY"
 	ErrKeyInvalid  = "KEY_INVALID"

@@ -1,7 +1,7 @@
 // Package monitor 是「系统状态」页：每秒采样本机 CPU／内存／网络／磁盘，按行式网格铺开，
 // 两个 AI 提供商的用量作为两个小面板挂在最后一行（都可在设置页关掉，关掉后空位自动被吃掉）。
 //
-// 布局规则见章程 A8/A9 与 PLAN.md M8.3；画法统一到 braille（internal/chart）；
+// 布局规则见章程 A8/A9 与 docs/work/PLAN.md M8.3；画法统一到 braille（internal/chart）；
 // 采集只读 /proc 与 /sys（internal/sysstat）。页面**只读**：不采集进程、不做任何写操作。
 package monitor
 

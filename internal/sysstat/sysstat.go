@@ -1,6 +1,6 @@
 // Package sysstat 采集本机系统状态：CPU、内存、网络、磁盘、温度。
 // 只读 /proc 与 /sys，不引入任何新依赖（章程「约束 · 数据获取（系统监控）」）；
-// 逐字段映射、过滤规则与本机实测依据见 FINDINGS.md §7。
+// 逐字段映射、过滤规则与本机实测依据见 docs/work/FINDINGS.md §7。
 //
 // 语义：单项数据读不到时该项 HasData=false（界面显示 [--]），不算错误、不猜值；
 // 只有 Root/proc 整个不存在（非 Linux，或容器里没挂 procfs）时 Read 才返回错误。

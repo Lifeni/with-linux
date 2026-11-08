@@ -157,7 +157,7 @@ func refreshSeconds(next, now time.Time) int {
 	return secs
 }
 
-// ErrorText 是错误码对应的显示文案（FINDINGS.md §1.2）。
+// ErrorText 是错误码对应的显示文案（docs/work/FINDINGS.md §1.2）。
 func ErrorText(code string) string {
 	switch code {
 	case ErrKeyInvalid:
@@ -213,7 +213,7 @@ func shortError(code string) string {
 	return code
 }
 
-// StatusText 是旧状态栏兼容用的摘要文本（主页面已无底部状态栏；FINDINGS.md §1.2）。
+// StatusText 是旧状态栏兼容用的摘要文本（主页面已无底部状态栏；docs/work/FINDINGS.md §1.2）。
 // severity：2=错误（红），1=注意（琥珀），0=正常（暗色）。
 func (m Model) StatusText() (text string, severity int) {
 	if m.configErr != "" {

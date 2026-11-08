@@ -1,6 +1,6 @@
 // Package cmdusage 是「Command Code 用量查询」工具。
 // 取数走 Command Code 的 alpha 端点（见 AGENTS.md 约束 · 数据获取（Command Code））；
-// 解析按真实响应核对（FINDINGS.md），字段缺失时该列按「无数据」显示 [--]，不猜测。
+// 解析按真实响应核对（docs/work/FINDINGS.md），字段缺失时该列按「无数据」显示 [--]，不猜测。
 package cmdusage
 
 import (
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// 端点与轮询参数（与 internal/usage 同一套策略，见 FINDINGS.md §1.3）。
+// 端点与轮询参数（与 internal/usage 同一套策略，见 docs/work/FINDINGS.md §1.3）。
 const (
 	APIBase         = "https://api.commandcode.ai"
 	RequestTimeout  = 10 * time.Second

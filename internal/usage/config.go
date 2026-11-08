@@ -1,5 +1,5 @@
 // Package usage 是「OpenCode Go 用量查询」工具。
-// 取数逻辑、错误码与文案、重试策略对照 FINDINGS.md §1（旧实现 usage-tui.js）移植。
+// 取数逻辑、错误码与文案、重试策略对照 docs/work/FINDINGS.md §1（旧实现 usage-tui.js）移植。
 package usage
 
 import "github.com/Lifeni/with-linux/internal/config"
