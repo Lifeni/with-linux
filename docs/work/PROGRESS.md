@@ -1222,3 +1222,131 @@ ok  	with-linux/internal/app	0.093s
 - 下载正式 `dist/with-linux_0.5.3_arm64.deb`：Release checksum 为 `a9be090c98b4e2c0d4287e8735026095f358061165a0dce4f0f23f319076777f`，本地 SHA-256 一致。
 - 正式包覆盖安装成功：`wl 0.5.3`；包内 `/usr/bin/wl` 与已安装二进制 SHA-256 同为 `be734bea706ce7846b388558a66548bfa2071da23db9c7e0a5217d4c39a9afab`，`dpkg -V` 无差异。
 - 安装版本在 180×30 tmux 会话启动成功，标题栏与系统状态页正常渲染；发送 `q` 后会话退出。
+
+## 2026-11-17 · M40：全面板开关与弹窗明细右对齐
+
+### 实现
+
+- `internal/config` 新增 `showCPU`／`showMemory`／`showNetwork`／`showDisk`／`showDocker`／`showCaddy` 六个 `*bool` 字段及独立写回函数；缺省 `nil` 表示显示，只有显式 `false` 才隐藏，旧配置升级后不会误关面板。
+- `internal/settings` 新增完整 `Panels` 可见性快照与 `TogglesChangedMsg{Panels}`；设置弹窗加入 `面板显示` 两列三行，点击勾选框或标签即写回，原有两个 AI key 行开关语义不变。
+- `internal/monitor` 新增 `Visibility`／`SetPanelVisibility`／`PanelVisible`；布局树按可见性生成叶子，宽屏和窄屏都不给隐藏面板留位，窄屏 Docker/Caddy 摘要条按开关缩为 0–2 行。
+- 全部面板关闭时主页面居中显示「所有面板已隐藏 · 点 [ 设置 ] 显示」；当前放大面板被关闭时自动退出放大态。
+- Docker 弹窗总量摘要改成等宽两端对齐；容器列表的 CPU／内存／状态列及列头改为真正贴右；选中容器的 ID、CPU、内存、网络、块 I/O、PIDs 拆成独立的标签左/值右行；Caddy「上次重载」也改成标签左、值右。
+- 章程、README、CHANGELOG、PLAN、FINDINGS 同步全面板开关、隐藏布局、摘要条 0–2 行与弹窗右对齐口径；新增面板拖拽缩放的可行性调研，标记为待确认的 M41 候选。
+
+### 验证
+
+- 新增配置测试覆盖六个 `show*` 字段写回、缺省 nil 与未知字段保留；设置测试覆盖默认六开、两列鼠标命中与逐字段写回；monitor 测试覆盖隐藏 CPU/Docker、摘要条数量、HitPanel 行号与 64 种可见性组合不折行；app 测试覆盖设置即时隐藏、全部隐藏提示和 Docker 列表/详情右边界一致。
+- `go test -count=1 ./...`：全量测试通过。
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接，`ldd` 均为 `not a dynamic executable`。
+- 生成并覆盖安装 `dist/with-linux_0.5.4~dev_arm64.deb`：`dpkg` 状态为 `0.5.4~dev arm64 install ok installed`，`wl --version` → `wl 0.5.4~dev`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `96520cf30f649653d5baafc1a70443064cc60c7082a9c2f4d74577f8d6edd468`，包 SHA-256 为 `3cca8c0a86cd165647fa7cd9748bb80887b425a366b3f20aa7cdab2f0f376895`，`dpkg -V with-linux` 无差异。
+- 160×40 临时空配置实拍：主页面正常渲染；`s` 打开设置可见 `面板显示` 三行六开关，Esc 关闭后 `q` 正常退出。预写 `showCPU:false`、`showCaddy:false` 后：CPU/Caddy 面板消失，设置中两项显示 `[ ]`，其余面板自动重排。
+- 120×30 预写六个系统/服务面板全关后：主页面居中显示「所有面板已隐藏 · 点 [ 设置 ] 显示」，`q` 正常退出。
+- 160×40 本机 Docker 实拍：弹窗列表列头与容器行 CPU／内存／状态右边界一致；选中容器的 CPU／内存／网络／块 I/O／PIDs 数值均贴右；Esc 关闭、`q` 退出正常。
+
+## 2026-11-17 · M41：面板共享边框拖拽缩放
+
+### 实现
+
+- `internal/grid` 新增 `Node.WithKey`/`WithShares` 与 `Resolve`：布局矩形之外返回内部共享边界；行宽、列高显式 shares 都铺满，拖动只改相邻两根轨道。行宽增加动态最小轨道夹取，缩窗后从高于下限的邻居回收差额；列高保持 `FloorH` 下限。
+- `internal/monitor` 新增内存态 `layoutShares`/`layoutActive`、稳定宽屏/窄屏分隔键、`HitDivider`/`BeginDividerDrag`/`DragDivider`/`EndDividerDrag`。热区只占左侧/上侧面板的 1 格边框，避免抢右侧/下方面板标题点击；拖动中用 Canvas 高亮当前边框。面板隐藏时手柄消失，重显且子轨道数量一致时复用旧比例并夹回。
+- `internal/app` 新增 `MouseMotionMsg`/`MouseReleaseMsg` 状态机；按下共享边框优先进入拖动，之后才判断卡片/AI 重试/标题放大。弹窗打开、面板放大、宽 <60 紧凑单列时不进入拖动；打开弹窗、窗口 resize 或面板开关变化会结束拖动并清除高亮。
+- 章程、README、CHANGELOG、PLAN、FINDINGS 同步共享边框拖拽口径；M41 当时的布局比例仅驻留内存、不写配置，后续由 M43 扩展为持久化。
+
+### 验证
+
+- 新增 `internal/grid` 测试覆盖分隔位置与单侧热区、比例跨 resize、动态最小宽度、极端比例不重叠与铺满；`internal/monitor/drag_test.go` 覆盖宽屏主栏/根分隔、窄屏主栏、FloorH/宽度夹取、标题点击不被抢占、隐藏/重显、缩窗保持下限、拖动高亮与紧凑模式无手柄。
+- `internal/app` 新增鼠标状态机、弹窗/放大态禁用拖动、resize 自动收尾与高亮清除测试；既有 Docker/Caddy/AI 点击语义不回归。
+- `go test -count=1 ./...`：全量测试通过。
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接，`ldd` 均为 `not a dynamic executable`。
+- 生成并覆盖安装 `dist/with-linux_0.5.5~dev_arm64.deb`：`dpkg` 状态为 `0.5.5~dev arm64 install ok installed`，`wl --version` → `wl 0.5.5~dev`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `3a86cb35815ad9edd244745a8cdf374518c687bd0c4e7f04fbd959836625199d`，包 SHA-256 为 `c72ca4983e60cea0388b433d44e9db7405602852c5b3dadad4e13e880edf12af`，`dpkg -V with-linux` 无差异。
+- 160×40 临时空配置 tmux 真实鼠标冒烟（清空继承的 `NO_COLOR` 以验证颜色）：主栏垂直边框从零基 x=95 拖到 x=120，边框列由 `96/97` 移到 `121/122`；上下拖动 CPU/下半区水平边框后，CPU 底边由第 15 行移到第 21 行；两种拖动中当前边框均出现 `48;5;68` 高亮，释放后高亮清除。
+- resize 到 150×38 后，拖过的左/右栏宽度按 121:39 缩放为 113:37（内部边框列 `113/114`），没有回到默认比例；布局仍铺满、不折行，发送 `q` 正常退出。
+- `go test -race` 仍受本机 RK3588 39 位用户地址空间限制（ThreadSanitizer `unsupported VMA range`），race 继续由 GitHub Actions 的 amd64 runner 覆盖。
+
+## 2026-11-18 · M42：宽屏网络密度重排
+
+### 实现
+
+- `internal/monitor` 新增 `statBlocksInlineRow`／`inlineStatLine`：把上传、下载压成同一行，各自左侧标签、中间最多 18 格短方块计量条、右侧两端对齐的速率与累计值；空间不足时退回标签左/值右的细线连接。
+- 宽网络面板移除 `netStatsBox` 与 `netExpandedStatsBox` 的右侧「速率」子框，改为顶部 `FillMirror` 动态图横跨整宽并吃掉底部统计之外的全部内高。
+- 上传固定在左、下载固定在右；错误/丢包非零时追加一行明细。展开态沿用同一整宽大图，并另列接口／IPv4、累计、错误/丢包，避免只有两个进度条。
+- 内部宽度 <56 时继续使用原窄布局：图在上、下载/上传各占两行分类；标题、IP、颜色和镜像序列不变。
+- 章程、README、CHANGELOG、PLAN、FINDINGS 同步整宽动态图与上传/下载同行的口径。
+
+### 验证
+
+- `TestWideNetworkUsesFullWidthStatsRow`：72 宽输出不再含「速率」子框，上传/下载标签在同一行，速率与累计均可见；40 宽仍上下分行。
+- `TestExpandedNetworkShowsWideDetails`：120×30 放大态仍显示接口、IPv4、累计与错误/丢包。
+- `TestLinesNeverWrap` 全宽度/高度/可见性矩阵继续通过；`go test -count=1 ./...` 全量通过。
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接，`ldd` 均为 `not a dynamic executable`。
+- 生成并覆盖安装 `dist/with-linux_0.5.6~dev_arm64.deb`：`dpkg` 状态为 `0.5.6~dev arm64 install ok installed`，`wl --version` → `wl 0.5.6~dev`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `88f62b075aa7004aa975f3c2fd7fc896c5c1139bde0a680b18ffa360986491c1`，包 SHA-256 为 `ab03949e1d617c01df7a27819d0565caa28078578c3026668d5442b5cd40e05b`，`dpkg -V with-linux` 无差异。
+- 安装包 README 与工作区 `README.md` SHA-256 同为 `57a78a07c9fdc882f716712471ef3ab4351c9a3ebaa973d58960f144f4fc93fd`。
+- 160×40 临时空配置 tmux 实拍：网络动态图横跨左侧整条下栏，底部同一行显示「↑ 上传 … ↓ 下载 …」，两个短方块条与累计值均可见，面板铺满且无折行。
+- 120×30 临时空配置 tmux 实拍：网络内高仅 6 行时仍进入新布局，动态图获得完整宽度和 4 行画布，上传/下载保持同一行；整宽布局的内高下限因此定为 5 行。
+- 点击网络标题放大到 160×40 实拍：动态图占满整屏宽度和新增高度，底部仍为上传/下载同一行，并另列「接口 / IPv4」「↓ 累计 / ↑ 累计」；`q` 正常退出。
+
+## 2026-11-19 · M43：面板布局记忆
+
+### 实现
+
+- `internal/config` 新增顶层 `layoutShares map[string][]int` 与 `SaveLayoutShares()`；沿用现有配置写回语义，保留其他字段、0600 权限、临时文件 rename，损坏配置先备份。
+- `internal/settings` 读取并在 `Reload()` 时刷新布局比例，`LayoutShares()` 返回深拷贝；设置保存 Key 或切换面板开关不会覆盖已保存的布局。
+- `internal/monitor` 新增 `SetLayoutShares()`／`LayoutShares()`，只接受已知稳定分隔键、每项 2–8 个正整数且不超过 `1<<20`；当前子轨道数量不匹配时忽略。补上 `narrow.main` 白名单，窄屏拖动也能跨启动恢复。
+- `internal/app` 启动时把配置比例交给系统状态页；实际拖动后置脏，松开鼠标、resize、打开弹窗或切换面板开关收尾时写回一次；只点击边框没有移动不写配置。
+- 保存失败为 best-effort，不影响本次拖动或 TUI 运行；暂不增加「恢复默认布局」按钮，清空 `layoutShares` 即回到默认比例。
+- 章程、README、CHANGELOG、PLAN、FINDINGS 同步 `layoutShares` 持久化与恢复口径。
+
+### 验证
+
+- 新增配置测试覆盖布局字段写回、其他字段与未知字段保留；设置测试覆盖重读与深拷贝；monitor 测试覆盖宽屏/窄屏比例往返、非法键/轨道/数值过滤与输入输出切片隔离。
+- app 测试覆盖拖动结束后写回、重启恢复、resize 打断也写回，以及“只点边框不移动不写配置”；会写配置的测试均使用独立 `XDG_CONFIG_HOME`。
+- `go test -count=1 ./...`：全量测试通过。
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接，`ldd` 均为 `not a dynamic executable`。
+- 生成并覆盖安装 `dist/with-linux_0.5.7~dev_arm64.deb`：`dpkg` 状态为 `0.5.7~dev arm64 install ok installed`，`wl --version` → `wl 0.5.7~dev`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `cb084e32335d7acff01a792e18e3566fc38545646f402910cb1f1ee895d56db4`，包 SHA-256 为 `4143a5040f5ec196a4f02f085e991fd58060b6b1a711d9eb8bdc518d90cb2805`，`dpkg -V with-linux` 无差异。
+- 安装包 README 与工作区 `README.md` SHA-256 同为 `4d61bc6b25a7c24628e82dd32db6de639ecca1b6000a6498aa368c940712902c`。
+- 160×40 临时空配置跨启动 tmux 实拍：初始无配置文件；主栏垂直边框从零基 x=95 拖到 x=120，松开后边框列由 `95/96` 移到 `120/121`，配置写入 `wide.main: [121, 39]`；`q` 退出后以同一配置重启，主栏位置保持一致（第 20 行竖线列 `0/60/61/120/121/159`），布局未回到默认 3:2。
+- 重启后再次发送 `q`，tmux 会话正常退出；临时配置保留用于复盘。
+- `go test -race` 仍受本机 RK3588 39 位用户地址空间限制（ThreadSanitizer `unsupported VMA range`），race 继续由 GitHub Actions 的 amd64 runner 覆盖。
+
+## 2026-11-19 · M44：Caddy 主卡去掉 API 行
+
+### 实现
+
+- `internal/monitor` 的 Caddy 主卡正文移除 `API` 管理地址行，只保留域名/上游与配置文件路径；API 状态仍完整保留在 Caddy 管理弹窗中。
+- Caddy 卡的可滚正文数量同步从「域名/上游 + API + 文件」改为「域名/上游 + 文件」。
+- `internal/monitor/view_test.go` 增加主卡短列表和滚动末端都不显示 `API`/管理地址、但配置文件行仍存在的断言。
+- 章程、README、CHANGELOG、PLAN 同步主卡与弹窗的差异口径。
+
+### 验证
+
+- `go test -count=1 ./internal/monitor` 与 `go test -count=1 ./...` 全量通过。
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接，`ldd` 均为 `not a dynamic executable`。
+- 生成并覆盖安装 `dist/with-linux_0.5.8~dev_arm64.deb`：`dpkg` 状态为 `0.5.8~dev arm64 install ok installed`，`wl --version` → `wl 0.5.8~dev`；`/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `916d94f46f1d60034d8db68855402ceafcb4d8c6462102c949a5151c84e400d9`，包 SHA-256 为 `4d318d75b0210b1286cdfa4f96d9f4d536138d4097f42593e55031b87df97271`，`dpkg -V with-linux` 无差异。
+- 安装包 README 与工作区 `README.md` SHA-256 同为 `d527962a3f15bf89020bf210b6eaa1de4265a15a6031d0d93f094768a9f91cdc`。
+- 160×40 临时空配置 tmux 实拍：等待 Caddy 首次 5 秒轮询后，主页面 Caddy 卡显示域名/上游、路由/请求计数与 `/etc/caddy/Caddyfile` 文件行，不含 `API` 或 `127.0.0.1:2019`；发送 `q` 后会话正常退出。
+- `go test -race` 仍受本机 RK3588 39 位用户地址空间限制，race 继续由 GitHub Actions 的 amd64 runner 覆盖。
+
+## 2026-11-19 · M45：版本策略与 0.5.4 定版
+
+### 实现
+
+- 根目录新增 `VERSION`，内容为 `0.5.4`；本地开发包默认读取该文件，开发期小改动不再递增版本，只有用户明确宣布正式发版时才升号。
+- `scripts/mkdeb.sh` 在未传 `VERSION` 环境变量时先读仓库根 `VERSION`，再回退最近 tag ＋ `~dev`／`dev`；环境变量仅保留为临时覆盖。
+- `AGENTS.md`、`PLAN.md`、README 开发段同步固定版本策略；`CHANGELOG.md` 将 M40–M44 的未发布内容归入 `[0.5.4] - 2026-11-19`，`web/version.txt` 同步为 `v0.5.4`。
+
+### 验证
+
+- `gofmt -l .`、`go mod tidy -diff`、`go vet ./...`、`git diff --check` 均无输出。
+- `go test -count=1 ./...`：全量测试包通过。
+- `CGO_ENABLED=0` 的 `linux/amd64`、`linux/arm64` 构建通过，`file` 均确认静态链接，`ldd` 均为 `not a dynamic executable`。
+- 不传 `VERSION` 执行 `bash scripts/mkdeb.sh arm64`，产出 `dist/with-linux_0.5.4_arm64.deb`；包控制信息为 `Version: 0.5.4`、`Architecture: arm64`。
+- 因本机已安装较高的临时包，执行 `sudo -n dpkg -i --force-downgrade dist/with-linux_0.5.4_arm64.deb`，dpkg 从 `0.5.8~dev` 降级安装到 `0.5.4`；`wl --version` → `wl 0.5.4`，`dpkg-query` → `0.5.4 arm64 install ok installed`，`dpkg -V with-linux` 无差异。
+- `/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `4806b0d4b628801fe308495ece23c38e2f8d2020d6fce5678f764e1f03052ee0`；deb SHA-256 为 `bedd7663e6227ad931d185be1791c1202fce576e69a491fa61c914204d4281bc`；工作区 README 与安装包内 README SHA-256 同为 `fb4dd7e74c1b7d4160c1a2a688ae12cf6dff0fc8f189833d5fa87253555e5bbd`。
+- 160×40 临时空配置 tmux 实拍：等待首次 Caddy 轮询后，Caddy 卡显示 `运行中` 与 `文件 ─ /etc/caddy/Caddyfile`，主页面不含 `API` 或 `127.0.0.1:2019`；发送 `q` 后会话正常退出。
+- 用户已确认提交、打 tag 并正式发布；本地改动按功能拆分为多个提交，v0.5.4 发布流程随后执行。
