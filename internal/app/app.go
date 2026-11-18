@@ -18,6 +18,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/Lifeni/with-linux/internal/chart"
+	"github.com/Lifeni/with-linux/internal/config"
 	"github.com/Lifeni/with-linux/internal/docker"
 	"github.com/Lifeni/with-linux/internal/meta"
 	"github.com/Lifeni/with-linux/internal/monitor"
@@ -75,6 +76,9 @@ type Model struct {
 	caddyMode         caddyModalMode
 	caddyConfigScroll int
 
+	dividerDrag     monitor.DragHandle
+	dragging        bool
+	dividerDirty    bool
 	focusPanel      string          // 非空时整屏放大该面板（bottom 式 expand）
 	contentOverride func() []string // 仅供测试注入多行内容
 }
@@ -102,18 +106,34 @@ func New(info meta.Info) Model { return NewWithServices(info, monitor.Services{}
 // NewWithServices 允许测试注入 Docker/Caddy 数据源。
 func NewWithServices(info meta.Info, svc monitor.Services) Model {
 	s := settings.New(info)
-	oc, cc := s.Visibility()
+	panels := s.Panels()
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
 		hostname = "localhost" // 取不到主机名不该让标题栏缺一块
 	}
-	return Model{
+	m := Model{
 		modal: modalNone,
 		// 尺寸未知时**不要**假装 80×24：先画一帧错误尺寸的界面，等真实 WindowSizeMsg
 		// 到达后 Bubble Tea 只补差异格子，终端上会残留旧布局的边框（pty 冒烟时实测到过）。
 		hostname: hostname,
 		settings: s,
-		monitor:  monitor.NewWithServices(oc, cc, svc),
+		monitor:  monitor.NewWithServices(panels.OpenCode, panels.CommandCode, svc),
+	}
+	m.monitor = m.monitor.SetPanelVisibility(monitorVisibility(panels))
+	m.monitor = m.monitor.SetLayoutShares(s.LayoutShares())
+	return m
+}
+
+func monitorVisibility(p settings.Panels) monitor.Visibility {
+	return monitor.Visibility{
+		CPU:         p.CPU,
+		Memory:      p.Memory,
+		Network:     p.Network,
+		Disk:        p.Disk,
+		Docker:      p.Docker,
+		Caddy:       p.Caddy,
+		OpenCode:    p.OpenCode,
+		CommandCode: p.CommandCode,
 	}
 }
 
@@ -714,13 +734,13 @@ func (m Model) caddyModalLines() []string {
 		at, reloadErr, reloading := m.monitor.CaddyReloadState()
 		switch {
 		case reloading:
-			body = append(body, chart.Dim.Render("上次  重载中…"))
+			body = append(body, alignedField("上次", "重载中…", innerW, chart.Dim))
 		case reloadErr != nil:
-			body = append(body, styleErr.Render(chart.ClampTo("上次  失败："+shortErrorText(reloadErr), m.modalMaxWidth()-6)))
+			body = append(body, alignedField("上次", "失败："+shortErrorText(reloadErr), innerW, styleErr))
 		case !at.IsZero():
-			body = append(body, chart.Dim.Render("上次  "+at.Format("15:04:05")+" 成功"))
+			body = append(body, alignedField("上次", at.Format("15:04:05")+" 成功", innerW, chart.Dim))
 		default:
-			body = append(body, chart.Dim.Render("上次  尚未重载"))
+			body = append(body, alignedField("上次", "尚未重载", innerW, chart.Dim))
 		}
 		body = append(body, "")
 		if reloading {
@@ -805,6 +825,7 @@ func (m Model) clearFocus() Model {
 }
 
 func (m Model) openSettings() Model {
+	m = m.stopDividerDrag()
 	m.modal = modalSettings
 	m.modalScroll = 0
 	m.settings = m.settings.Reload()
@@ -825,6 +846,7 @@ func (m Model) closeModal() Model {
 }
 
 func (m Model) openDocker() (Model, tea.Cmd) {
+	m = m.stopDividerDrag()
 	m.modal = modalDocker
 	m.dockerMode = dockerList
 	m.dockerSel = 0
@@ -841,12 +863,27 @@ func (m Model) openDocker() (Model, tea.Cmd) {
 }
 
 func (m Model) openCaddy() (Model, tea.Cmd) {
+	m = m.stopDividerDrag()
 	m.modal = modalCaddy
 	m.caddyMode = caddyStatus
 	m.caddyConfigScroll = 0
 	mm, cmd := m.monitor.RefreshCaddySystemd()
 	m.monitor = mm
 	return m, cmd
+}
+
+// stopDividerDrag 结束拖动状态；打开弹窗、窗口 resize 或面板开关变化时调用。
+func (m Model) stopDividerDrag() Model {
+	dirty := m.dividerDirty
+	m.dragging = false
+	m.dividerDirty = false
+	m.monitor = m.monitor.EndDividerDrag()
+	if dirty {
+		if shares := m.monitor.LayoutShares(); len(shares) > 0 {
+			_ = config.SaveLayoutShares(shares)
+		}
+	}
+	return m
 }
 
 func (m Model) dockerSelected() (docker.Container, bool) {
@@ -1041,10 +1078,13 @@ func (m Model) dockerLogViewRows() int {
 	return max(bodyMax-3, 1)
 }
 
-// refreshVisibility 从设置页重算两个用量面板的可见性并交给系统状态页（A7）。
+// refreshVisibility 从设置页重算所有面板的可见性并交给系统状态页（A7）。
 func (m Model) refreshVisibility() Model {
-	oc, cc := m.settings.Visibility()
-	m.monitor = m.monitor.SetVisibility(oc, cc)
+	p := m.settings.Panels()
+	m.monitor = m.monitor.SetPanelVisibility(monitorVisibility(p))
+	if m.focusPanel != "" && !m.monitor.PanelVisible(m.focusPanel) {
+		m.clearFocus()
+	}
 	return m
 }
 
@@ -1259,6 +1299,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m = m.stopDividerDrag()
 		m.scroll = clamp(m.scroll, 0, m.maxScroll())
 		m.modalScroll = clamp(m.modalScroll, 0, m.maxModalScroll())
 		// 清屏再整帧重画：窗口尺寸变化后旧布局的字符不会自己消失（Bubble Tea 只补差异格子）。
@@ -1272,8 +1313,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case settings.TogglesChangedMsg:
-		// 展示开关变动：系统状态页增删该面板并重排网格（同行其余变宽、整行都关则删行）。
-		m.monitor = m.monitor.SetVisibility(msg.OpenCode, msg.CommandCode)
+		// 展示开关变动：系统状态页增删面板并重排网格（同行其余变宽、整行都关则删行）。
+		m = m.stopDividerDrag()
+		m.monitor = m.monitor.SetPanelVisibility(monitorVisibility(msg.Panels))
+		if m.focusPanel != "" && !m.monitor.PanelVisible(m.focusPanel) {
+			m.clearFocus()
+		}
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -1357,6 +1402,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.clearFocus(), tea.ClearScreen
 			}
 			line := m.contentStart() + msg.Y - 1
+			if mm, handle, ok := m.monitor.BeginDividerDrag(msg.X, line, m.width, m.viewHeight()); ok {
+				m.monitor = mm
+				m.dividerDrag = handle
+				m.dragging = true
+				m.dividerDirty = false
+				return m, nil
+			}
 			switch id := m.monitor.HitPanel(msg.X, line, m.width, m.viewHeight()); id {
 			case monitor.PanelDocker:
 				return m.openDocker()
@@ -1374,6 +1426,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.ClearScreen
 			}
 		}
+
+	case tea.MouseMotionMsg:
+		if !m.dragging || m.modal != modalNone {
+			return m, nil
+		}
+		line := m.contentStart() + msg.Y - 1
+		m.monitor = m.monitor.DragDivider(m.dividerDrag, msg.X, line, m.width, m.viewHeight())
+		m.dividerDirty = true
+		return m, nil
+
+	case tea.MouseReleaseMsg:
+		if !m.dragging {
+			return m, nil
+		}
+		return m.stopDividerDrag(), nil
 
 	case tea.MouseWheelMsg:
 		if m.modal == modalDocker && m.dockerMode == dockerLogs {

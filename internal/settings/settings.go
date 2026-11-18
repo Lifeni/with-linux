@@ -22,10 +22,21 @@ type SavedMsg struct {
 	CommandCode bool
 }
 
-// TogglesChangedMsg 在勾选框切换后由 Update 产出，携带两个用量面板最新可见性；框架据此增删面板。
-type TogglesChangedMsg struct {
+// Panels 是系统状态页所有面板的可见性快照。
+type Panels struct {
+	CPU         bool
+	Memory      bool
+	Network     bool
+	Disk        bool
+	Docker      bool
+	Caddy       bool
 	OpenCode    bool
 	CommandCode bool
+}
+
+// TogglesChangedMsg 在勾选框切换后由 Update 产出，携带所有面板最新可见性；框架据此增删面板。
+type TogglesChangedMsg struct {
+	Panels Panels
 }
 
 // 可编辑行索引。以后加设置项在这里追加，并在 innerLines 里加一行。
@@ -47,14 +58,18 @@ const (
 	innerAPIKey      = 2
 	innerCommandCode = 3
 	innerConfig      = 4
-	innerSection     = 6
-	innerVersion     = 7
-	innerDate        = 8
-	innerCommit      = 9
-	innerGo          = 10
-	innerPlatform    = 11
-	innerRepo        = 12
-	innerRows        = 13
+	innerPanelTitle  = 6
+	innerPanelCPU    = 7
+	innerPanelDisk   = 8
+	innerPanelDocker = 9
+	innerSection     = 11
+	innerVersion     = 12
+	innerDate        = 13
+	innerCommit      = 14
+	innerGo          = 15
+	innerPlatform    = 16
+	innerRepo        = 17
+	innerRows        = 18
 )
 
 // 行标签。
@@ -62,6 +77,7 @@ const (
 	labelAPIKey      = "OpenCode Key"
 	labelCommandCode = "Command Code Key"
 	labelConfig      = "配置文件"
+	labelPanels      = "面板显示"
 	labelSection     = "关于"
 	labelVersion     = "版本"
 	labelDate        = "构建日期"
@@ -73,6 +89,35 @@ const (
 
 // gutterW 是可编辑行的选择标记宽度（"▸ " 或两个空格）。
 const gutterW = 2
+
+// panelID 是设置页里六个系统/服务面板开关的标识。
+type panelID int
+
+const (
+	panelCPU panelID = iota
+	panelMemory
+	panelDisk
+	panelNetwork
+	panelDocker
+	panelCaddy
+)
+
+type panelToggle struct {
+	label string
+	id    panelID
+}
+
+type panelToggleRow struct {
+	inner int
+	cells []panelToggle
+}
+
+// 两列排布，节省弹窗高度；顺序与主页面从上到下、从左到右的阅读顺序一致。
+var panelToggleRows = []panelToggleRow{
+	{inner: innerPanelCPU, cells: []panelToggle{{label: "CPU", id: panelCPU}, {label: "内存", id: panelMemory}}},
+	{inner: innerPanelDisk, cells: []panelToggle{{label: "磁盘", id: panelDisk}, {label: "网络", id: panelNetwork}}},
+	{inner: innerPanelDocker, cells: []panelToggle{{label: "Docker", id: panelDocker}, {label: "Caddy", id: panelCaddy}}},
+}
 
 // boxChromeW 是线框占用的水平宽度：左右边框各 1 ＋ 左右内边距各 4。
 const boxChromeW = 10
@@ -104,6 +149,13 @@ type Model struct {
 	keyCC      string // 已保存的 Command Code key（明文；渲染时掩码）
 	showOC     *bool  // OpenCode 用量页展示开关（nil = 未显式设置，按 key 推导）
 	showCC     *bool  // Command Code 用量页展示开关（nil = 未显式设置，按 key 推导）
+	showCPU    *bool
+	showMemory *bool
+	showDisk   *bool
+	showNet    *bool
+	showDocker *bool
+	showCaddy  *bool
+	layout     map[string][]int
 
 	input    textinput.Model
 	editing  bool
@@ -131,7 +183,34 @@ func (m Model) Editing() bool { return m.editing }
 // Visibility 报告两个用量面板当前是否展示：显式开关优先，未显式设置时按对应 key 是否存在推导。
 // 框架据此决定系统状态页要展示哪些用量面板。
 func (m Model) Visibility() (openCode, commandCode bool) {
-	return effectiveVisibility(m.showOC, m.key), effectiveVisibility(m.showCC, m.keyCC)
+	p := m.Panels()
+	return p.OpenCode, p.CommandCode
+}
+
+// Panels 报告所有面板的当前可见性。系统/服务面板缺省显示，AI 面板缺省按 key 推导。
+func (m Model) Panels() Panels {
+	return Panels{
+		CPU:         effectivePanel(m.showCPU),
+		Memory:      effectivePanel(m.showMemory),
+		Disk:        effectivePanel(m.showDisk),
+		Network:     effectivePanel(m.showNet),
+		Docker:      effectivePanel(m.showDocker),
+		Caddy:       effectivePanel(m.showCaddy),
+		OpenCode:    effectiveVisibility(m.showOC, m.key),
+		CommandCode: effectiveVisibility(m.showCC, m.keyCC),
+	}
+}
+
+// LayoutShares 返回配置里保存的面板宽高比例；返回副本，调用方不能改到设置页状态。
+func (m Model) LayoutShares() map[string][]int {
+	if len(m.layout) == 0 {
+		return nil
+	}
+	out := make(map[string][]int, len(m.layout))
+	for key, shares := range m.layout {
+		out[key] = append([]int(nil), shares...)
+	}
+	return out
 }
 
 // effectiveVisibility 决定某用量页是否展示：显式设置优先；未设置时，填了 key 就自动展示一次。
@@ -140,6 +219,11 @@ func effectiveVisibility(explicit *bool, key string) bool {
 		return *explicit
 	}
 	return key != ""
+}
+
+// effectivePanel 决定系统/服务面板是否展示：只有显式 false 才隐藏。
+func effectivePanel(explicit *bool) bool {
+	return explicit == nil || *explicit
 }
 
 // Reload 重读配置文件并退出编辑态（打开设置弹窗时调用，避免旧编辑状态残留）。
@@ -216,6 +300,9 @@ func (m Model) Click(x, line, width int) (Model, tea.Cmd) {
 	if m.editing {
 		return m, nil
 	}
+	if id, ok := m.panelToggleAt(x, line, width); ok {
+		return m.togglePanel(id)
+	}
 	switch line {
 	case apiKeyLine:
 		m.selected = rowAPIKey
@@ -228,6 +315,35 @@ func (m Model) Click(x, line, width int) (Model, tea.Cmd) {
 		return m.toggle()
 	}
 	return m.beginEdit()
+}
+
+// panelCells 把面板开关区拆成两列等宽单元格；内容宽度与 innerLines 一致。
+func panelCells(width int) (cellW int) {
+	contentW := max(width-boxChromeW, 1)
+	return max((contentW-2)/2, 1)
+}
+
+// panelToggleAt 判断点击是否落在面板开关的勾选框或标签上。
+func (m Model) panelToggleAt(x, line, width int) (panelID, bool) {
+	boxX := m.boxLeft(width) + 1 + 4
+	relative := x - boxX
+	if relative < 0 {
+		return 0, false
+	}
+	cellW := panelCells(width)
+	for _, row := range panelToggleRows {
+		if line != 2+row.inner {
+			continue
+		}
+		for i, cell := range row.cells {
+			start := i * (cellW + 2)
+			need := checkWidth + runewidth.StringWidth(cell.label)
+			if relative >= start && relative < start+need {
+				return cell.id, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // checkboxHit 报告终端列 x 是否落在当前行的勾选框上（线框水平居中，需先算线框左边界）。
@@ -356,9 +472,77 @@ func (m Model) toggle() (Model, tea.Cmd) {
 	m.loadErr = ""
 	m.saveErr = ""
 	m.saved = true
-	oc, cc := m.Visibility()
-	return m, func() tea.Msg { return TogglesChangedMsg{OpenCode: oc, CommandCode: cc} }
+	return m, m.togglesChangedCmd()
 }
+
+// togglePanel 切换某个系统/服务面板：显式写回 bool，并产出完整可见性消息。
+func (m Model) togglePanel(id panelID) (Model, tea.Cmd) {
+	next := !m.panelVisible(id)
+	var err error
+	switch id {
+	case panelCPU:
+		err = config.SaveShowCPU(next)
+	case panelMemory:
+		err = config.SaveShowMemory(next)
+	case panelDisk:
+		err = config.SaveShowDisk(next)
+	case panelNetwork:
+		err = config.SaveShowNetwork(next)
+	case panelDocker:
+		err = config.SaveShowDocker(next)
+	case panelCaddy:
+		err = config.SaveShowCaddy(next)
+	}
+	if err != nil {
+		m.saveErr = err.Error()
+		return m, nil
+	}
+	switch id {
+	case panelCPU:
+		m.showCPU = boolPtr(next)
+	case panelMemory:
+		m.showMemory = boolPtr(next)
+	case panelDisk:
+		m.showDisk = boolPtr(next)
+	case panelNetwork:
+		m.showNet = boolPtr(next)
+	case panelDocker:
+		m.showDocker = boolPtr(next)
+	case panelCaddy:
+		m.showCaddy = boolPtr(next)
+	}
+	m.loadErr = ""
+	m.saveErr = ""
+	m.saved = true
+	return m, m.togglesChangedCmd()
+}
+
+func (m Model) togglesChangedCmd() tea.Cmd {
+	p := m.Panels()
+	return func() tea.Msg { return TogglesChangedMsg{Panels: p} }
+}
+
+func (m Model) panelVisible(id panelID) bool {
+	p := m.Panels()
+	switch id {
+	case panelCPU:
+		return p.CPU
+	case panelMemory:
+		return p.Memory
+	case panelDisk:
+		return p.Disk
+	case panelNetwork:
+		return p.Network
+	case panelDocker:
+		return p.Docker
+	case panelCaddy:
+		return p.Caddy
+	default:
+		return false
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
 
 func (m Model) reloadConfig() Model {
 	cfg, err := config.Load()
@@ -367,12 +551,26 @@ func (m Model) reloadConfig() Model {
 	m.keyCC = ""
 	m.showOC = nil
 	m.showCC = nil
+	m.showCPU = nil
+	m.showMemory = nil
+	m.showDisk = nil
+	m.showNet = nil
+	m.showDocker = nil
+	m.showCaddy = nil
+	m.layout = nil
 	switch {
 	case err == nil:
 		m.key = cfg.OpenCodeAPIKey
 		m.keyCC = cfg.CommandCodeAPIKey
 		m.showOC = cfg.ShowOpenCode
 		m.showCC = cfg.ShowCommandCode
+		m.showCPU = cfg.ShowCPU
+		m.showMemory = cfg.ShowMemory
+		m.showDisk = cfg.ShowDisk
+		m.showNet = cfg.ShowNetwork
+		m.showDocker = cfg.ShowDocker
+		m.showCaddy = cfg.ShowCaddy
+		m.layout = cfg.LayoutShares
 	case config.IsMissing(err):
 	default:
 		m.loadErr = config.UserMessage(err)
@@ -449,6 +647,11 @@ func (m Model) innerLines(width int) []string {
 		editable(ccLabel, m.keyCC, rowCommandCode), // innerCommandCode
 		row(labelConfig, m.configPath, false),      // innerConfig
 		"",
+		stSection.Render(labelPanels), // innerPanelTitle
+		m.panelToggleLine(panelToggleRows[0], width),
+		m.panelToggleLine(panelToggleRows[1], width),
+		m.panelToggleLine(panelToggleRows[2], width),
+		"",
 		stSection.Render(labelSection), // innerSection
 		row(labelVersion, m.info.Version, false),
 		row(labelDate, m.info.Date, false),
@@ -457,6 +660,24 @@ func (m Model) innerLines(width int) []string {
 		row(labelPlatform, m.info.Platform, false),
 		row(labelRepo, meta.RepoURL, false),
 	}
+}
+
+// panelToggleLine 渲染一行两列的面板开关，补齐到框内宽度，保证鼠标命中稳定。
+func (m Model) panelToggleLine(row panelToggleRow, width int) string {
+	contentW := max(width-boxChromeW, 1)
+	cellW := panelCells(width)
+	cells := make([]string, 0, len(row.cells))
+	for _, cell := range row.cells {
+		on := m.panelVisible(cell.id)
+		mark := stDim.Render(checkMark(on))
+		if on {
+			mark = stValue.Render(checkMark(on))
+		}
+		text := mark + stLabel.Render(cell.label)
+		cells = append(cells, chart.PadTo(text, cellW))
+	}
+	line := strings.Join(cells, "  ")
+	return chart.ClampTo(chart.PadTo(line, contentW), contentW)
 }
 
 // Lines 渲染设置页内容：线框内的表单，**自然高度**（不裁剪、不垂直居中）。

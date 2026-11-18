@@ -490,8 +490,60 @@ func TestSettingsSaveShowsProviderPanel(t *testing.T) {
 	}
 }
 
+func clickPanelToggle(t *testing.T, m Model, label string) (Model, tea.Cmd) {
+	t.Helper()
+	r := m.modalRect()
+	for i, line := range m.modalWindow() {
+		text := plain(line)
+		if !strings.Contains(text, label) {
+			continue
+		}
+		idx := strings.Index(text, "[✓]")
+		if idx < 0 {
+			idx = strings.Index(text, "[ ]")
+		}
+		if idx < 0 {
+			continue
+		}
+		x := r.X + runewidth.StringWidth(text[:idx]) + 1
+		return updateModel(m, tea.MouseClickMsg{X: x, Y: r.Y + i, Button: tea.MouseLeft})
+	}
+	t.Fatalf("设置弹窗找不到面板开关 %q", label)
+	return m, nil
+}
+
+func TestSettingsSwitchesAllPanels(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := enterSettings(t, newTestModel())
+	nm, cmd := clickPanelToggle(t, m, "CPU")
+	m = nm
+	if cmd == nil {
+		t.Fatal("点 CPU 开关未产出消息")
+	}
+	if _, ok := cmd().(settings.TogglesChangedMsg); !ok {
+		t.Fatalf("Cmd 产出 %T, want TogglesChangedMsg", cmd())
+	}
+	m, _ = updateModel(m, cmd())
+	m, _ = updateModel(m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	if got := m.monitor.PanelVisible(monitor.PanelCPU); got {
+		t.Fatal("关闭 CPU 后监视页仍标记 CPU 可见")
+	}
+	page := plainPage(m.monitor.Lines(100, 26))
+	if strings.Contains(page, "CPU") {
+		t.Fatalf("关闭 CPU 后主页面仍在渲染 CPU：\n%s", page)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShowCPU == nil || *cfg.ShowCPU {
+		t.Fatalf("配置 showCPU = %v, want 显式 false", cfg.ShowCPU)
+	}
+}
+
 func TestModalCentersAndDims(t *testing.T) {
 	m := newTestModel()
+	m.height = 34
 	m.contentOverride = func() []string {
 		lines := make([]string, m.viewHeight())
 		for i := range lines {
@@ -896,6 +948,207 @@ func findPanelContentPoint(m Model, id string) (int, int, bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+func findDividerPoint(m Model) (int, int, bool) {
+	for y := 0; y < m.viewHeight(); y++ {
+		for x := 0; x < m.width; x++ {
+			if _, ok := m.monitor.HitDivider(x, y, m.width, m.viewHeight()); ok {
+				return x, y, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+func TestDividerDragViaMouse(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newTestModel()
+	m.width, m.height = 160, 40
+	x, y, ok := findDividerPoint(m)
+	if !ok {
+		t.Fatal("宽屏没有可拖动分隔线")
+	}
+	before := plainPage(m.monitor.Lines(m.width, m.viewHeight()))
+	nm, _ := updateModel(m, tea.MouseClickMsg{X: x, Y: 1 + y, Button: tea.MouseLeft})
+	if !nm.dragging {
+		t.Fatal("按住分隔线没有进入拖动态")
+	}
+	if nm.modal != modalNone || nm.focusPanel != "" {
+		t.Fatalf("拖动误触了弹窗/放大：modal=%d focus=%q", nm.modal, nm.focusPanel)
+	}
+	nm, _ = updateModel(nm, tea.MouseMotionMsg{X: x + 4, Y: 1 + y + 5, Button: tea.MouseLeft})
+	after := plainPage(nm.monitor.Lines(nm.width, nm.viewHeight()))
+	if before == after {
+		t.Fatal("鼠标移动没有改变面板尺寸")
+	}
+	nm, _ = updateModel(nm, tea.MouseReleaseMsg{X: x + 4, Y: 1 + y + 5, Button: tea.MouseLeft})
+	if nm.dragging {
+		t.Fatal("松开鼠标后仍在拖动态")
+	}
+	if got := plainPage(nm.monitor.Lines(nm.width, nm.viewHeight())); got != after {
+		t.Fatal("松开鼠标后布局没有停在拖动结果")
+	}
+}
+
+func TestDividerDragPersistsLayoutAcrossRestart(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newTestModel()
+	m.width, m.height = 160, 40
+	x, y, ok := findDividerPoint(m)
+	if !ok {
+		t.Fatal("宽屏没有可拖动分隔线")
+	}
+	nm, _ := updateModel(m, tea.MouseClickMsg{X: x, Y: 1 + y, Button: tea.MouseLeft})
+	if !nm.dragging {
+		t.Fatal("按住分隔线没有进入拖动态")
+	}
+	nm, _ = updateModel(nm, tea.MouseMotionMsg{X: x + 24, Y: 1 + y + 5, Button: tea.MouseLeft})
+	nm, _ = updateModel(nm, tea.MouseReleaseMsg{X: x + 24, Y: 1 + y + 5, Button: tea.MouseLeft})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.LayoutShares) == 0 {
+		t.Fatal("拖动结束后没有写回 layoutShares")
+	}
+
+	restarted := New(meta.Info{Version: "test"})
+	restarted.width, restarted.height = m.width, m.height
+	got := restarted.monitor.LayoutShares()
+	for key, values := range cfg.LayoutShares {
+		if len(got[key]) != len(values) {
+			t.Fatalf("重启后 %s = %v, want %v", key, got[key], values)
+		}
+		for i := range values {
+			if got[key][i] != values[i] {
+				t.Fatalf("重启后 %s = %v, want %v", key, got[key], values)
+			}
+		}
+	}
+}
+
+func TestDividerClickWithoutMotionDoesNotPersist(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newTestModel()
+	m.width, m.height = 160, 40
+	x, y, ok := findDividerPoint(m)
+	if !ok {
+		t.Fatal("宽屏没有可拖动分隔线")
+	}
+	nm, _ := updateModel(m, tea.MouseClickMsg{X: x, Y: 1 + y, Button: tea.MouseLeft})
+	if !nm.dragging {
+		t.Fatal("按住分隔线没有进入拖动态")
+	}
+	nm, _ = updateModel(nm, tea.MouseReleaseMsg{X: x, Y: 1 + y, Button: tea.MouseLeft})
+	if nm.dragging {
+		t.Fatal("松开鼠标后仍在拖动态")
+	}
+	if _, err := config.Load(); !config.IsMissing(err) {
+		t.Fatalf("没有移动的分隔线点击不应写配置，Load err = %v", err)
+	}
+}
+
+func TestWindowResizePersistsDraggedLayout(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newTestModel()
+	m.width, m.height = 160, 40
+	x, y, ok := findDividerPoint(m)
+	if !ok {
+		t.Fatal("宽屏没有可拖动分隔线")
+	}
+	nm, _ := updateModel(m, tea.MouseClickMsg{X: x, Y: 1 + y, Button: tea.MouseLeft})
+	if !nm.dragging {
+		t.Fatal("按住分隔线没有进入拖动态")
+	}
+	nm, _ = updateModel(nm, tea.MouseMotionMsg{X: x + 18, Y: 1 + y + 5, Button: tea.MouseLeft})
+	nm, _ = updateModel(nm, tea.WindowSizeMsg{Width: 150, Height: 38})
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.LayoutShares) == 0 {
+		t.Fatal("拖动被 resize 收尾时没有写回 layoutShares")
+	}
+}
+
+func TestStartupRestoresSavedLayoutShares(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `{"layoutShares":{"wide.main":[110,50]}}`)
+	m := New(meta.Info{Version: "test"})
+	m.width, m.height = 160, 40
+	got := m.monitor.LayoutShares()["wide.main"]
+	if len(got) != 2 || got[0] != 110 || got[1] != 50 {
+		t.Fatalf("启动恢复 wide.main = %v, want [110 50]", got)
+	}
+}
+
+func TestDividerDragDisabledInModal(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 160, 40
+	m = m.openSettings()
+	x, y, ok := findDividerPoint(m)
+	if !ok {
+		t.Fatal("宽屏没有可拖动分隔线")
+	}
+	nm, _ := updateModel(m, tea.MouseClickMsg{X: x, Y: 1 + y, Button: tea.MouseLeft})
+	if nm.dragging {
+		t.Fatal("弹窗打开时仍从背景分隔线进入拖动态")
+	}
+}
+
+func TestDividerDragDisabledInFocus(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 160, 40
+	x, y, ok := findPanelTitlePoint(m, monitor.PanelCPU)
+	if !ok {
+		t.Fatal("找不到 CPU 标题行")
+	}
+	nm, _ := updateModel(m, tea.MouseClickMsg{X: x, Y: 1 + y, Button: tea.MouseLeft})
+	if nm.focusPanel != monitor.PanelCPU {
+		t.Fatalf("点击 CPU 标题后 focusPanel = %q", nm.focusPanel)
+	}
+	divX, divY, ok := findDividerPoint(nm)
+	if !ok {
+		t.Fatal("宽屏没有可拖动分隔线")
+	}
+	nm, _ = updateModel(nm, tea.MouseClickMsg{X: divX, Y: 1 + divY, Button: tea.MouseLeft})
+	if nm.dragging {
+		t.Fatal("放大态仍从背景分隔线进入拖动态")
+	}
+	if nm.focusPanel != "" {
+		t.Fatalf("放大态点击内容没有返回布局：focusPanel = %q", nm.focusPanel)
+	}
+}
+
+func TestWindowResizeEndsDividerDrag(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newTestModel()
+	m.width, m.height = 160, 40
+	x, y, ok := findDividerPoint(m)
+	if !ok {
+		t.Fatal("宽屏没有可拖动分隔线")
+	}
+	nm, _ := updateModel(m, tea.MouseClickMsg{X: x, Y: 1 + y, Button: tea.MouseLeft})
+	if !nm.dragging {
+		t.Fatal("按住分隔线没有进入拖动态")
+	}
+	if !strings.Contains(strings.Join(nm.monitor.Lines(nm.width, nm.viewHeight()), "\n"), "48;5;68") {
+		t.Fatal("拖动中的分隔线没有高亮")
+	}
+	nm, _ = updateModel(nm, tea.MouseMotionMsg{X: x + 6, Y: 1 + y, Button: tea.MouseLeft})
+	nm, _ = updateModel(nm, tea.WindowSizeMsg{Width: 150, Height: 38})
+	if nm.dragging {
+		t.Fatal("窗口 resize 后仍在拖动态")
+	}
+	if strings.Contains(strings.Join(nm.monitor.Lines(nm.width, nm.viewHeight()), "\n"), "48;5;68") {
+		t.Fatal("窗口 resize 后拖动高亮没有清除")
+	}
+	nm, _ = updateModel(nm, tea.MouseReleaseMsg{X: x + 6, Y: 1 + y, Button: tea.MouseLeft})
+	if nm.dragging {
+		t.Fatal("resize 收尾后松开鼠标又进入了拖动态")
+	}
 }
 
 func TestDockerModalButtonsAndLogs(t *testing.T) {

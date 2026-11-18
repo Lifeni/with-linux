@@ -494,8 +494,8 @@ func TestTogglePersists(t *testing.T) {
 		t.Fatal("切换未产出 Cmd")
 	}
 	msg, ok := cmd().(TogglesChangedMsg)
-	if !ok || msg.OpenCode {
-		t.Fatalf("切换 Cmd = %T/%+v, want TogglesChangedMsg{OpenCode:false}", cmd(), msg)
+	if !ok || msg.Panels.OpenCode {
+		t.Fatalf("切换 Cmd = %T/%+v, want OpenCode=false", cmd(), msg)
 	}
 	if oc, _ := m.Visibility(); oc {
 		t.Fatal("切换后 OpenCode 页仍展示")
@@ -538,8 +538,8 @@ func TestToggleOnWithoutKey(t *testing.T) {
 	nm, cmd := m.toggle()
 	m = nm
 	msg, ok := cmd().(TogglesChangedMsg)
-	if !ok || !msg.OpenCode {
-		t.Fatalf("空格 Cmd = %T/%+v, want TogglesChangedMsg{OpenCode:true}", cmd(), msg)
+	if !ok || !msg.Panels.OpenCode {
+		t.Fatalf("空格 Cmd = %T/%+v, want OpenCode=true", cmd(), msg)
 	}
 	if oc, _ := m.Visibility(); !oc {
 		t.Fatal("手动打开后应展示")
@@ -550,5 +550,115 @@ func TestToggleOnWithoutKey(t *testing.T) {
 	}
 	if cfg.ShowOpenCode == nil || !*cfg.ShowOpenCode {
 		t.Fatalf("配置 showOpenCode = %v, want 显式 true", cfg.ShowOpenCode)
+	}
+}
+
+func TestSystemPanelSwitchesDefaultOnAndRender(t *testing.T) {
+	m := newTestModel(t, "")
+	p := m.Panels()
+	if !p.CPU || !p.Memory || !p.Disk || !p.Network || !p.Docker || !p.Caddy {
+		t.Fatalf("系统/服务面板默认应全部显示: %+v", p)
+	}
+	body := rowsText(m)
+	for _, label := range []string{labelPanels, "CPU", "内存", "磁盘", "网络", "Docker", "Caddy"} {
+		if !strings.Contains(body, label) {
+			t.Errorf("设置页缺少面板开关 %q:\n%s", label, body)
+		}
+	}
+	if got := strings.Count(body, checkOff); got != 2 {
+		t.Fatalf("默认应有 2 个 AI 开关关闭，got %d 个 [ ]:\n%s", got, body)
+	}
+	if got := strings.Count(body, checkOn); got != 6 {
+		t.Fatalf("默认应有 6 个系统/服务开关打开，got %d 个 [✓]:\n%s", got, body)
+	}
+}
+
+// 点系统面板勾选框：只改对应字段，产出完整可见性消息。
+func TestClickSystemPanelSwitchPersists(t *testing.T) {
+	m := newTestModel(t, "")
+	const width = 72
+	x := m.boxLeft(width) + 1 + 4
+	nm, cmd := m.Click(x, 2+innerPanelCPU, width)
+	m = nm
+	if cmd == nil {
+		t.Fatal("点 CPU 开关未产出 Cmd")
+	}
+	msg, ok := cmd().(TogglesChangedMsg)
+	if !ok {
+		t.Fatalf("Cmd 产出 %T, want TogglesChangedMsg", cmd())
+	}
+	if msg.Panels.CPU {
+		t.Fatalf("切换后的消息仍显示 CPU: %+v", msg.Panels)
+	}
+	if !msg.Panels.Memory || !msg.Panels.Disk || !msg.Panels.Network || !msg.Panels.Docker || !msg.Panels.Caddy {
+		t.Fatalf("只关 CPU 时其它面板不应受影响: %+v", msg.Panels)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShowCPU == nil || *cfg.ShowCPU {
+		t.Fatalf("配置 showCPU = %v, want 显式 false", cfg.ShowCPU)
+	}
+	if cfg.ShowMemory != nil || cfg.ShowDocker != nil {
+		t.Fatalf("切换 CPU 不应写入其它字段: %+v", cfg)
+	}
+}
+
+// 第二列开关的鼠标命中不能落到左列。
+func TestClickSecondColumnPanelSwitch(t *testing.T) {
+	m := newTestModel(t, "")
+	const width = 72
+	cellW := panelCells(width)
+	x := m.boxLeft(width) + 1 + 4 + cellW + 2
+	nm, cmd := m.Click(x, 2+innerPanelDocker, width)
+	m = nm
+	if cmd == nil {
+		t.Fatal("点 Caddy 开关未产出 Cmd")
+	}
+	msg, ok := cmd().(TogglesChangedMsg)
+	if !ok || msg.Panels.Caddy || !msg.Panels.Docker {
+		t.Fatalf("第二列点击命中错误: %T %+v", cmd(), msg)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShowCaddy == nil || *cfg.ShowCaddy {
+		t.Fatalf("配置 showCaddy = %v, want 显式 false", cfg.ShowCaddy)
+	}
+	if cfg.ShowDocker != nil {
+		t.Fatalf("切换 Caddy 不应写入 showDocker: %v", cfg.ShowDocker)
+	}
+}
+
+func rowsText(m Model) string {
+	return stripANSI(strings.Join(m.Lines(72), "\n"))
+}
+
+func TestReloadLoadsLayoutShares(t *testing.T) {
+	m := newTestModel(t, "")
+	want := map[string][]int{
+		"wide.main": {100, 60},
+		"wide.left": {8, 10},
+	}
+	if err := config.SaveLayoutShares(want); err != nil {
+		t.Fatal(err)
+	}
+	m = m.Reload()
+	got := m.LayoutShares()
+	for key, values := range want {
+		if len(got[key]) != len(values) {
+			t.Fatalf("%s = %v, want %v", key, got[key], values)
+		}
+		for i := range values {
+			if got[key][i] != values[i] {
+				t.Fatalf("%s = %v, want %v", key, got[key], values)
+			}
+		}
+	}
+	got["wide.main"][0] = 1
+	if m.LayoutShares()["wide.main"][0] != 100 {
+		t.Fatal("LayoutShares 没有返回副本")
 	}
 }
