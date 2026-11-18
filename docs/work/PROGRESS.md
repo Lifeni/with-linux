@@ -1338,7 +1338,7 @@ ok  	with-linux/internal/app	0.093s
 
 - 根目录新增 `VERSION`，内容为 `0.5.4`；本地开发包默认读取该文件，开发期小改动不再递增版本，只有用户明确宣布正式发版时才升号。
 - `scripts/mkdeb.sh` 在未传 `VERSION` 环境变量时先读仓库根 `VERSION`，再回退最近 tag ＋ `~dev`／`dev`；环境变量仅保留为临时覆盖。
-- `AGENTS.md`、`PLAN.md`、README 开发段同步固定版本策略；`CHANGELOG.md` 将 M40–M44 的未发布内容归入 `[0.5.4] - 2026-11-19`，`web/version.txt` 同步为 `v0.5.4`。
+- `AGENTS.md`、`docs/work/PLAN.md`、README 开发段同步固定版本策略；`CHANGELOG.md` 将 M40–M44 的未发布内容归入 `[0.5.4] - 2026-11-19`，`web/version.txt` 同步为 `v0.5.4`。
 
 ### 验证
 
@@ -1350,3 +1350,35 @@ ok  	with-linux/internal/app	0.093s
 - `/usr/bin/wl` 与 `dist/pkg/wl-linux-arm64` SHA-256 同为 `4806b0d4b628801fe308495ece23c38e2f8d2020d6fce5678f764e1f03052ee0`；deb SHA-256 为 `bedd7663e6227ad931d185be1791c1202fce576e69a491fa61c914204d4281bc`；工作区 README 与安装包内 README SHA-256 同为 `fb4dd7e74c1b7d4160c1a2a688ae12cf6dff0fc8f189833d5fa87253555e5bbd`。
 - 160×40 临时空配置 tmux 实拍：等待首次 Caddy 轮询后，Caddy 卡显示 `运行中` 与 `文件 ─ /etc/caddy/Caddyfile`，主页面不含 `API` 或 `127.0.0.1:2019`；发送 `q` 后会话正常退出。
 - 用户已确认提交、打 tag 并正式发布；本地改动按功能拆分为多个提交，v0.5.4 发布流程随后执行。
+
+## 2026-11-19 · v0.5.4 正式发布
+
+### 提交与推送
+
+- 按功能拆分为 9 个提交后快进推送 `main`（`37b2b3f..a654fa9`）：
+  - `d5ca487` feat(config): 增加面板开关与布局比例字段
+  - `98caed5` feat(grid): 支持可拖拽的共享轨道比例
+  - `85cf7a8` feat(monitor): 支持隐藏面板与可拖拽布局
+  - `4e2c0a6` feat(app): 右对齐 Docker 与 Caddy 弹窗明细
+  - `576ac6c` feat: 接通面板开关、拖拽布局与布局记忆
+  - `5753b54` feat(monitor): 将宽屏网络改为整宽动态图与同行速率
+  - `ecc87a5` fix(monitor): 移除 Caddy 主卡 API 行
+  - `23380c8` docs: 记录面板控制、拖拽布局与网络 Caddy 调整
+  - `a654fa9` release: v0.5.4
+- annotated Tag `v0.5.4` 指向 `a654fa9`，已单独推送。
+- 推送首次因 GitHub HTTP/2 断流失败，改用 HTTP/1.1 后成功；没有改写提交或强推。
+
+### CI 与 Release
+
+- CI run **44354647559**（`main` / `a654fa9`）→ `completed / success`；格式、tidy、vet、单测、race 与双架构交叉构建全部通过。
+- Release run **44354734845**（tag `v0.5.4`）→ `completed / success`。
+- Release：https://github.com/Lifeni/with-linux/releases/tag/v0.5.4（`draft=false`、`prerelease=false`）。
+- 产物齐全：`with-linux-linux-{amd64,arm64}.tar.gz`、`with-linux_0.5.4_{amd64,arm64}.deb`、`with-linux_0.5.4_{amd64,arm64}.rpm`、`checksums.txt`。
+- workflow 仅有 Node.js 20 弃用与 `ubuntu-latest` 迁移提示，不影响构建。
+
+### 发布产物验证
+
+- 下载官方 `with-linux_0.5.4_arm64.deb` 与 `checksums.txt`，`sha256sum -c` → `OK`；deb SHA-256 为 `074f112bb152ef347b26db48f5638e8ec0935017398d07053b065a2d81405130`。
+- 用官方 deb 覆盖安装：`wl --version` → `wl 0.5.4`；`dpkg-query` → `0.5.4 arm64 install ok installed`；`dpkg -V with-linux` 无差异；安装后 `/usr/bin/wl` SHA-256 为 `9e3851fcfe947477000fd5243ff25496a6739a66d5ffb25bc0a9091f931c8a27`。
+- 最终本地重打包产物为 `dist/with-linux_0.5.4_arm64.deb`，deb SHA-256 为 `3267707d0f71118a4c82c4faacdee4e8aaa0772445730670103936527d24752d`；工作区与包内 README SHA-256 均为 `921ef29c9568be27c8059c4b653c7c9cc52fee1047a6b84cb354d181d3c58170`。
+- 160×40 临时空配置 tmux 实拍：Caddy 主卡显示 `运行中` 与 `/etc/caddy/Caddyfile`，不含 `API` 或 `127.0.0.1:2019`；发送 `q` 后会话正常退出。
