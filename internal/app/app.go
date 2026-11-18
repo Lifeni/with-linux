@@ -291,6 +291,30 @@ func alignedField(label, value string, width int, style lipgloss.Style) string {
 	return left + " " + chart.Dim.Render(strings.Repeat("─", gap-2)) + " " + right
 }
 
+type alignedCell struct {
+	label string
+	value string
+}
+
+// alignedCells 把若干「标签左、值右」的小格排成一行，格宽均分、余数从左到右分配。
+func alignedCells(cells []alignedCell, width int, style lipgloss.Style) string {
+	if len(cells) == 0 || width <= 0 {
+		return ""
+	}
+	gap := 2
+	avail := max(width-gap*(len(cells)-1), len(cells))
+	base, rem := avail/len(cells), avail%len(cells)
+	parts := make([]string, 0, len(cells))
+	for i, cell := range cells {
+		cellW := base
+		if i < rem {
+			cellW++
+		}
+		parts = append(parts, alignedField(cell.label, cell.value, cellW, style))
+	}
+	return chart.ClampTo(strings.Join(parts, "  "), width)
+}
+
 // buttonHit 判断点击是否落在某行的 label 上（x 是相对弹窗左边缘的列）。
 func buttonHit(line string, x int, label string) bool {
 	plain := stripANSI(line)
@@ -321,6 +345,18 @@ func padCell(s string, width int) string {
 	s = runewidth.Truncate(s, width, "…")
 	if gap := width - runewidth.StringWidth(s); gap > 0 {
 		return s + strings.Repeat(" ", gap)
+	}
+	return s
+}
+
+// padRight 把单元格内容贴右，供 Docker 列表的数值列与列头共用。
+func padRight(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	s = runewidth.Truncate(s, width, "…")
+	if gap := width - runewidth.StringWidth(s); gap > 0 {
+		return strings.Repeat(" ", gap) + s
 	}
 	return s
 }
@@ -378,11 +414,11 @@ func (m Model) dockerListBody(limit int) []string {
 			chart.Dim.Render(strings.Repeat("─", w)), buttonLine(w, []string{"[刷新]"}, []string{"[关闭]"}))
 		return body
 	}
-	summary := chart.FitFields([]string{
-		chart.Text.Render(fmt.Sprintf("共 %d 个 · %d 运行", s.Total, s.Running)),
-		chart.Dim.Render("CPU " + chart.Pct(s.CPUPercent)),
-		chart.Dim.Render("内存 " + chart.Bytes(float64(s.MemUsage))),
-	}, " · ", m.dockerModalWidth()-4)
+	summary := alignedCells([]alignedCell{
+		{label: "容器", value: fmt.Sprintf("%d 个 · %d 运行", s.Total, s.Running)},
+		{label: "CPU", value: chart.Pct(s.CPUPercent)},
+		{label: "内存", value: chart.Bytes(float64(s.MemUsage))},
+	}, m.dockerModalWidth()-4, chart.Dim)
 	body = append(body, summary)
 	if len(s.Containers) == 0 {
 		w := m.dockerModalWidth() - 4
@@ -393,8 +429,8 @@ func (m Model) dockerListBody(limit int) []string {
 
 	innerW := m.dockerModalWidth() - 4
 	nameW := max(innerW-27, 8)
-	header := "    " + padCell("容器", nameW) + " " + padCell("CPU", 5) + " " +
-		padCell("内存", 8) + " " + padCell("状态", 7)
+	header := "    " + padCell("容器", nameW) + " " + padRight("CPU", 5) + " " +
+		padRight("内存", 8) + " " + padRight("状态", 7)
 	body = append(body, chart.Dim.Render(chart.ClampTo(header, innerW)))
 
 	sel := clamp(m.dockerSel, 0, len(s.Containers)-1)
@@ -451,8 +487,8 @@ func (m Model) dockerRow(c docker.Container, selected bool, innerW, nameW int) s
 	}
 	line := marker + stateStyle.Render(stateDot) + " " +
 		chart.PadTo(chart.FadeText(c.Name, nameW), nameW) + " " +
-		padCell(cpu, 5) + " " + chart.Dim.Render(padCell(mem, 8)) + " " +
-		stateStyle.Render(padCell(c.ShortState(), 7))
+		padRight(cpu, 5) + " " + chart.Dim.Render(padRight(mem, 8)) + " " +
+		stateStyle.Render(padRight(c.ShortState(), 7))
 	return chart.ClampTo(line, innerW)
 }
 
@@ -476,7 +512,7 @@ func dockerState(c docker.Container) (dot string, style lipgloss.Style) {
 
 func (m Model) dockerDetailLines(c docker.Container, innerW int) []string {
 	lines := []string{
-		chart.Dim.Render(chart.ClampTo("ID "+shortID(c.ID)+" · 镜像 "+c.Image+" · "+c.Status, innerW)),
+		alignedField("ID", shortID(c.ID)+" · 镜像 "+c.Image+" · "+c.Status, innerW, chart.Dim),
 	}
 	if c.HasStats {
 		cpu := "[--]"
@@ -488,12 +524,15 @@ func (m Model) dockerDetailLines(c docker.Container, innerW int) []string {
 			mem = fmt.Sprintf("%s / %s (%s)",
 				chart.Bytes(float64(c.MemUsage)), chart.Bytes(float64(c.MemLimit)), chart.Pct(c.MemPercent))
 		}
-		lines = append(lines, chart.Dim.Render(chart.ClampTo("CPU "+cpu+" · 内存 "+mem, innerW)))
-		lines = append(lines, chart.Dim.Render(chart.ClampTo(fmt.Sprintf(
-			"网络 ↓%s ↑%s · 块 I/O 读%s 写%s · PIDs %d",
-			chart.Bytes(float64(c.NetRx)), chart.Bytes(float64(c.NetTx)),
-			chart.Bytes(float64(c.BlockRead)), chart.Bytes(float64(c.BlockWrite)), c.PIDs,
-		), innerW)))
+		lines = append(lines,
+			alignedField("CPU", cpu, innerW, chart.Dim),
+			alignedField("内存", mem, innerW, chart.Dim),
+			alignedField("网络", fmt.Sprintf("↓%s ↑%s",
+				chart.Bytes(float64(c.NetRx)), chart.Bytes(float64(c.NetTx))), innerW, chart.Dim),
+			alignedField("块 I/O", fmt.Sprintf("读%s 写%s",
+				chart.Bytes(float64(c.BlockRead)), chart.Bytes(float64(c.BlockWrite))), innerW, chart.Dim),
+			alignedField("PIDs", strconv.FormatUint(c.PIDs, 10), innerW, chart.Dim),
+		)
 	} else {
 		lines = append(lines, chart.Dim.Render("[--] 统计不可用"))
 	}

@@ -913,7 +913,7 @@ func TestDockerModalButtonsAndLogs(t *testing.T) {
 	page := plainPage(m.modalWindow())
 	for _, want := range []string{
 		"Docker 管理", "web", "api", "UP", "EXIT",
-		"CPU [--] · 内存 200B / 1000B (20%)",
+		"200B / 1000B (20%)", "网络", "块 I/O", "PIDs",
 		"[停止]", "[重启]", "[日志]", "[关闭]",
 	} {
 		if !strings.Contains(page, want) {
@@ -922,6 +922,50 @@ func TestDockerModalButtonsAndLogs(t *testing.T) {
 	}
 	if !separatorAboveButton(m.modalWindow(), "[关闭]") {
 		t.Fatal("Docker 按钮上方缺少分隔线")
+	}
+	rightEdges := map[string]int{}
+	for _, field := range []struct {
+		label string
+		value string
+	}{
+		{"CPU", "[--]"},
+		{"内存", "200B / 1000B (20%)"},
+		{"网络", "↓100B ↑200B"},
+		{"块 I/O", "读300B 写400B"},
+		{"PIDs", "5"},
+	} {
+		for _, line := range m.modalWindow() {
+			text := plain(line)
+			if !strings.Contains(text, field.label) || !strings.Contains(text, field.value) {
+				continue
+			}
+			text = strings.TrimRight(strings.TrimSuffix(text, "│"), " ")
+			rightEdges[field.label] = lipgloss.Width(text)
+			break
+		}
+	}
+	if len(rightEdges) != 5 {
+		t.Fatalf("没有找到全部 Docker 详情字段：%v\n%s", rightEdges, page)
+	}
+	wantRight := rightEdges["内存"]
+	for label, right := range rightEdges {
+		if right != wantRight {
+			t.Errorf("Docker 详情 %s 值右边界 = %d, want %d（%v）", label, right, wantRight, rightEdges)
+		}
+	}
+	for _, line := range m.modalWindow() {
+		text := plain(line)
+		switch {
+		case strings.Contains(text, "容器") && strings.Contains(text, "CPU") && strings.Contains(text, "状态"):
+			want := padRight("CPU", 5) + " " + padRight("内存", 8) + " " + padRight("状态", 7)
+			if !strings.Contains(text, want) {
+				t.Errorf("Docker 列表列头没有右对齐：%q", text)
+			}
+		case strings.Contains(text, "web") && strings.Contains(text, "UP"):
+			if !strings.HasSuffix(strings.TrimRight(strings.TrimSuffix(text, "│"), " "), "UP") {
+				t.Errorf("Docker 列表状态列没有贴右：%q", text)
+			}
+		}
 	}
 
 	nm, _ = clickModalLine(t, m, "api", 10)
