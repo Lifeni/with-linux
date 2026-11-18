@@ -41,6 +41,18 @@ const (
 	PanelCmdCode  = "commandcode"
 )
 
+// Visibility 是系统状态页所有面板的可见性快照。
+type Visibility struct {
+	CPU         bool
+	Memory      bool
+	Network     bool
+	Disk        bool
+	Docker      bool
+	Caddy       bool
+	OpenCode    bool
+	CommandCode bool
+}
+
 // tickMsg 是本包私有的每秒 tick；它同时驱动系统采样、AI 倒计时与自动重试。
 type tickMsg time.Time
 
@@ -86,6 +98,10 @@ type Model struct {
 	cmdUsage cmdusage.Model
 	showOC   bool
 	showCC   bool
+	hidden   map[string]bool // nil 表示六个系统/服务面板全部显示；显式 false 才写入
+
+	layoutShares map[string][]int // 拖动后的共享边界比例；由框架持久化并恢复
+	layoutActive *dividerRef      // 正在拖动的边界，用于高亮
 
 	docker       *docker.Collector
 	dockerSnap   docker.Snapshot
@@ -311,6 +327,57 @@ func (m Model) Refresh(commandCode bool) (Model, tea.Cmd) {
 func (m Model) SetVisibility(openCode, commandCode bool) Model {
 	m.showOC, m.showCC = openCode, commandCode
 	return m
+}
+
+// SetPanelVisibility 更新所有面板的可见性（设置弹窗勾选框切换或保存后由框架调用）。
+func (m Model) SetPanelVisibility(v Visibility) Model {
+	m.showOC, m.showCC = v.OpenCode, v.CommandCode
+	m.layoutActive = nil
+	m.hidden = nil
+	for id, visible := range map[string]bool{
+		PanelCPU:    v.CPU,
+		PanelMem:    v.Memory,
+		PanelNet:    v.Network,
+		PanelDisk:   v.Disk,
+		PanelDocker: v.Docker,
+		PanelCaddy:  v.Caddy,
+	} {
+		if !visible {
+			if m.hidden == nil {
+				m.hidden = make(map[string]bool)
+			}
+			m.hidden[id] = true
+		}
+	}
+	return m
+}
+
+// PanelVisibility 返回当前可见性，供框架在开关变动后核对布局。
+func (m Model) PanelVisibility() Visibility {
+	return Visibility{
+		CPU:         m.PanelVisible(PanelCPU),
+		Memory:      m.PanelVisible(PanelMem),
+		Network:     m.PanelVisible(PanelNet),
+		Disk:        m.PanelVisible(PanelDisk),
+		Docker:      m.PanelVisible(PanelDocker),
+		Caddy:       m.PanelVisible(PanelCaddy),
+		OpenCode:    m.showOC,
+		CommandCode: m.showCC,
+	}
+}
+
+// PanelVisible 报告某块面板当前是否进入布局树。
+func (m Model) PanelVisible(id string) bool {
+	switch id {
+	case PanelCPU, PanelMem, PanelNet, PanelDisk, PanelDocker, PanelCaddy:
+		return !m.hidden[id]
+	case PanelOpenCode:
+		return m.showOC
+	case PanelCmdCode:
+		return m.showCC
+	default:
+		return false
+	}
 }
 
 // DockerSnapshot / CaddySnapshot 供主页面与弹窗读取最近一次刷新结果。

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/Lifeni/with-linux/internal/cmdusage"
 	"github.com/Lifeni/with-linux/internal/sysstat"
 	"github.com/Lifeni/with-linux/internal/usage"
@@ -210,6 +212,84 @@ func TestSetVisibility(t *testing.T) {
 	m = m.SetVisibility(true, true)
 	if got := m.providers(); len(got) != 2 {
 		t.Errorf("两个都开时提供商快照 = %d 个, want 2", len(got))
+	}
+}
+
+func TestPanelVisibilityHidesCardsAndServiceStrip(t *testing.T) {
+	m := testModel(t, false, false)
+	vis := m.PanelVisibility()
+	vis.CPU = false
+	vis.Docker = false
+	m = m.SetPanelVisibility(vis)
+
+	if m.PanelVisible(PanelCPU) || m.PanelVisible(PanelDocker) {
+		t.Fatal("关闭的面板仍被标记为可见")
+	}
+	wide := plainPage(m.Lines(120, 30))
+	if strings.Contains(wide, "CPU") {
+		t.Fatalf("关掉 CPU 后面板仍在渲染:\n%s", wide)
+	}
+	if strings.Contains(wide, "Docker") {
+		t.Fatalf("关掉 Docker 后服务栏仍在渲染:\n%s", wide)
+	}
+
+	strip := m.serviceStrip(80)
+	if len(strip) != 1 || strings.Contains(plainPage(strip), "Docker") || !strings.Contains(plainPage(strip), "Caddy") {
+		t.Fatalf("窄屏服务摘要没有按开关缩减: %#v", strip)
+	}
+	if got := m.serviceStripCount(); got != 1 {
+		t.Fatalf("serviceStripCount = %d, want 1", got)
+	}
+	if id := m.HitPanel(1, 23, 80, 24); id != PanelCaddy {
+		t.Fatalf("窄屏底部摘要在 Docker 关闭后应命中 Caddy，got %q", id)
+	}
+}
+
+func TestAllPanelsHiddenShowsCenteredNotice(t *testing.T) {
+	m := testModel(t, false, false)
+	m = m.SetPanelVisibility(Visibility{})
+	lines := m.Lines(100, 28)
+	if len(lines) != 28 {
+		t.Fatalf("全隐藏页面出了 %d 行, want 28", len(lines))
+	}
+	page := plainPage(lines)
+	if !strings.Contains(page, "所有面板已隐藏") {
+		t.Fatalf("全隐藏时没有提示:\n%s", page)
+	}
+	for i, line := range lines {
+		if got := lipgloss.Width(plain(line)); got != 100 {
+			t.Fatalf("第 %d 行宽 %d, want 100", i, got)
+		}
+	}
+	if !strings.Contains(page, "点 [ 设置 ] 显示") {
+		t.Fatalf("全隐藏提示缺少设置入口:\n%s", page)
+	}
+}
+
+func TestEverySystemPanelCombinationKeepsLayoutValid(t *testing.T) {
+	base := testModel(t, false, false)
+	for mask := 0; mask < 64; mask++ {
+		vis := Visibility{
+			CPU:     mask&1 != 0,
+			Memory:  mask&2 != 0,
+			Network: mask&4 != 0,
+			Disk:    mask&8 != 0,
+			Docker:  mask&16 != 0,
+			Caddy:   mask&32 != 0,
+		}
+		m := base.SetPanelVisibility(vis)
+		for _, size := range [][2]int{{120, 30}, {80, 24}, {40, 12}} {
+			lines := m.Lines(size[0], size[1])
+			if len(lines) == 0 {
+				t.Fatalf("mask=%06b %dx%d 出了 0 行", mask, size[0], size[1])
+			}
+			for i, line := range lines {
+				if got := lipgloss.Width(plain(line)); got > size[0] {
+					t.Fatalf("mask=%06b %dx%d 第 %d 行宽 %d 超宽: %q",
+						mask, size[0], size[1], i, got, plain(line))
+				}
+			}
+		}
 	}
 }
 

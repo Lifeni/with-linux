@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"fmt"
+	"image"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,8 +25,37 @@ const (
 
 	// WideLayoutWidth 以上用 btop 式四栏上排 + 两栏下排；窄屏回退旧两栏 + 2 行服务条。
 	WideLayoutWidth = 120
-	serviceStripH   = 2
 )
+
+// 共享边框的稳定标识：面板开关或窗口 resize 后仍能找回同一条边界。
+const (
+	splitWideRoot    = "wide.root"
+	splitWideMain    = "wide.main"
+	splitWideLeft    = "wide.left"
+	splitWideMem     = "wide.memdisk"
+	splitWideRight   = "wide.right"
+	splitWideUsage   = "wide.usage"
+	splitNarrowRoot  = "narrow.root"
+	splitNarrowMain  = "narrow.main"
+	splitNarrowLeft  = "narrow.left"
+	splitNarrowRight = "narrow.right"
+	splitNarrowUsage = "narrow.usage"
+)
+
+// layoutShareKeys 是允许持久化的稳定分隔键；未知键不会被渲染或写回。
+var layoutShareKeys = map[string]struct{}{
+	splitWideRoot:    {},
+	splitWideMain:    {},
+	splitWideLeft:    {},
+	splitWideMem:     {},
+	splitWideRight:   {},
+	splitWideUsage:   {},
+	splitNarrowRoot:  {},
+	splitNarrowMain:  {},
+	splitNarrowLeft:  {},
+	splitNarrowRight: {},
+	splitNarrowUsage: {},
+}
 
 // 面板的三个高度：MinH 完整形态、FloorH 退化成「标题＋1 行数值」、
 // WantH 够用即可（用量面板 5 行就到顶，多分的高度还给别的块）。
@@ -99,28 +129,36 @@ func (m Model) Lines(width, height int) []string {
 	if width <= 0 || height <= 0 {
 		return nil
 	}
+	if !m.hasVisiblePanels() {
+		return messageLines(width, height, "所有面板已隐藏 · 点 [ 设置 ] 显示")
+	}
 	if width >= WideLayoutWidth {
-		pl := grid.Solve(width, height, m.tree(width))
+		pl, dividers, gridH := m.resolveGrid(width, height)
 		if pl == nil {
 			return chart.ClampLines(m.compactLines(width), width)
 		}
-		return m.compose(width, height, pl)
+		out := m.compose(width, gridH, pl)
+		return m.highlightDivider(out, width, gridH, dividers)
 	}
 
 	// 窄屏：旧两栏 + 底部两行服务摘要条；网格高度先扣掉摘要条。
 	strip := m.serviceStrip(width)
-	gridH := height
-	if len(strip) > 0 {
-		gridH -= len(strip)
-	}
+	gridH := height - len(strip)
 	if gridH <= 0 {
+		if len(strip) > 0 {
+			return chart.ClampLines(strip[:min(len(strip), height)], width)
+		}
 		return chart.ClampLines(m.compactLines(width), width)
 	}
-	pl := grid.Solve(width, gridH, m.tree(width))
+	pl, dividers := grid.Resolve(width, gridH, m.tree(width))
 	if pl == nil {
 		return chart.ClampLines(m.compactLines(width), width)
 	}
 	out := m.compose(width, gridH, pl)
+	if len(pl) == 0 {
+		out = messageLines(width, gridH, "系统面板已隐藏")
+	}
+	out = m.highlightDivider(out, width, gridH, dividers)
 	out = append(out, strip...)
 	return out[:min(len(out), height)]
 }
@@ -129,45 +167,224 @@ func (m Model) Lines(width, height int) []string {
 // 宽 ≥120：CPU 整行；下半区按 3:2 分栏，左侧内存/磁盘＋整行网络，右侧 AI/Docker/Caddy。
 // 窄屏：保持旧两栏；Docker/Caddy 只出现在底部摘要条里。
 func (m Model) tree(width int) grid.Node {
+	if width >= WideLayoutWidth {
+		return m.wideTree(width)
+	}
+	return m.narrowTree()
+}
+
+func (m Model) wideTree(width int) grid.Node {
+	var leftNodes []grid.Node
+	if top, ok := m.memDiskNode(splitWideMem); ok {
+		if m.PanelVisible(PanelNet) {
+			leftNodes = append(leftNodes, grid.Col(top, grid.Leaf(panelNet)))
+		} else {
+			leftNodes = append(leftNodes, top)
+		}
+	} else if m.PanelVisible(PanelNet) {
+		leftNodes = append(leftNodes, grid.Leaf(panelNet))
+	}
+
+	var rightNodes []grid.Node
+	if usage, ok := m.usageNode(splitWideUsage); ok {
+		rightNodes = append(rightNodes, usage)
+	}
+	if m.PanelVisible(PanelDocker) {
+		rightNodes = append(rightNodes, grid.Leaf(panelDocker))
+	}
+	if m.PanelVisible(PanelCaddy) {
+		rightNodes = append(rightNodes, grid.Leaf(panelCaddy))
+	}
+
+	var (
+		lower grid.Node
+		has   bool
+	)
+	switch {
+	case len(leftNodes) > 0 && len(rightNodes) > 0:
+		leftWidth := max(width*3/5, 76)
+		left := m.keyedNode(grid.Col(leftNodes...), splitWideLeft, len(leftNodes))
+		right := m.keyedNode(grid.Col(rightNodes...), splitWideRight, len(rightNodes))
+		lower = m.keyedNode(
+			grid.Row(
+				left.WithWidth(leftWidth),
+				right.WithWidth(max(width-leftWidth, 1)),
+			),
+			splitWideMain, 2,
+		)
+		has = true
+	case len(leftNodes) > 0:
+		lower, has = m.keyedNode(grid.Col(leftNodes...), splitWideLeft, len(leftNodes)), true
+	case len(rightNodes) > 0:
+		lower, has = m.keyedNode(grid.Col(rightNodes...), splitWideRight, len(rightNodes)), true
+	}
+
+	var root []grid.Node
+	if m.PanelVisible(PanelCPU) {
+		root = append(root, grid.Leaf(panelCPUWide).WithWeight(3))
+	}
+	if has {
+		root = append(root, lower.WithWeight(7))
+	}
+	switch len(root) {
+	case 0:
+		return grid.Node{}
+	case 1:
+		return root[0]
+	default:
+		return m.keyedNode(grid.Col(root...), splitWideRoot, len(root))
+	}
+}
+
+func (m Model) narrowTree() grid.Node {
+	var left []grid.Node
+	if m.PanelVisible(PanelMem) {
+		left = append(left, grid.Leaf(panelMem))
+	}
+	if m.PanelVisible(PanelDisk) {
+		left = append(left, grid.Leaf(panelDisk))
+	}
+	var right []grid.Node
+	if m.PanelVisible(PanelNet) {
+		right = append(right, grid.Leaf(panelNet))
+	}
+	if usage, ok := m.usageNode(splitNarrowUsage); ok {
+		right = append(right, usage)
+	}
+
+	var bottom grid.Node
+	hasBottom := false
+	switch {
+	case len(left) > 0 && len(right) > 0:
+		bottom = m.keyedNode(
+			grid.Row(
+				m.keyedNode(grid.Col(left...), splitNarrowLeft, len(left)),
+				m.keyedNode(grid.Col(right...), splitNarrowRight, len(right)),
+			),
+			splitNarrowMain, 2,
+		).WithWeight(4)
+		hasBottom = true
+	case len(left) > 0:
+		bottom, hasBottom = m.keyedNode(grid.Col(left...), splitNarrowLeft, len(left)), true
+	case len(right) > 0:
+		bottom, hasBottom = m.keyedNode(grid.Col(right...), splitNarrowRight, len(right)), true
+	}
+
+	var root []grid.Node
+	if m.PanelVisible(PanelCPU) {
+		root = append(root, grid.Leaf(panelCPU).WithWeight(3))
+	}
+	if hasBottom {
+		root = append(root, bottom.WithWeight(4))
+	}
+	switch len(root) {
+	case 0:
+		return grid.Node{}
+	case 1:
+		return root[0]
+	default:
+		return m.keyedNode(grid.Col(root...), splitNarrowRoot, len(root))
+	}
+}
+
+func (m Model) memDiskNode(key string) (grid.Node, bool) {
+	var nodes []grid.Node
+	if m.PanelVisible(PanelMem) {
+		nodes = append(nodes, grid.Leaf(panelMem))
+	}
+	if m.PanelVisible(PanelDisk) {
+		nodes = append(nodes, grid.Leaf(panelDisk))
+	}
+	if len(nodes) == 0 {
+		return grid.Node{}, false
+	}
+	return m.keyedNode(grid.Row(nodes...), key, len(nodes)), true
+}
+
+func (m Model) usageNode(key string) (grid.Node, bool) {
 	var usage []grid.Node
 	for _, p := range m.providers() {
 		usage = append(usage, grid.Leaf(panelByID[p.id]))
 	}
-	usageRow := grid.Row(usage...)
+	if len(usage) == 0 {
+		return grid.Node{}, false
+	}
+	return m.keyedNode(grid.Row(usage...), key, len(usage)), true
+}
 
-	if width >= WideLayoutWidth {
-		// 网络吃满左侧下排；AI 固定右侧服务栏顶部，Docker/Caddy 在下方。
-		leftWidth := max(width*3/5, 76)
-		left := grid.Col(
-			grid.Row(grid.Leaf(panelMem), grid.Leaf(panelDisk)),
-			grid.Row(grid.Leaf(panelNet)),
-		)
-		rightChildren := make([]grid.Node, 0, 3)
-		if len(usage) > 0 {
-			rightChildren = append(rightChildren, usageRow)
+func (m Model) keyedNode(n grid.Node, key string, children int) grid.Node {
+	n = n.WithKey(key)
+	if shares := m.layoutShares[key]; len(shares) == children {
+		n = n.WithShares(shares...)
+	}
+	return n
+}
+
+// SetLayoutShares 恢复配置里保存的布局比例。无效键、过短/过长的轨道数与非正比例
+// 会被丢弃，避免损坏配置影响布局或造成大数运算溢出。
+func (m Model) SetLayoutShares(shares map[string][]int) Model {
+	m.layoutShares = normalizeLayoutShares(shares)
+	m.layoutActive = nil
+	return m
+}
+
+// LayoutShares 返回当前布局比例的快照，供框架在拖动结束时写回配置。
+func (m Model) LayoutShares() map[string][]int {
+	if len(m.layoutShares) == 0 {
+		return nil
+	}
+	out := make(map[string][]int, len(m.layoutShares))
+	for key, shares := range m.layoutShares {
+		out[key] = append([]int(nil), shares...)
+	}
+	return out
+}
+
+func normalizeLayoutShares(shares map[string][]int) map[string][]int {
+	out := make(map[string][]int, len(shares))
+	for key, values := range shares {
+		if _, ok := layoutShareKeys[key]; !ok || len(values) < 2 || len(values) > 8 {
+			continue
 		}
-		rightChildren = append(rightChildren, grid.Leaf(panelDocker), grid.Leaf(panelCaddy))
-		right := grid.Col(rightChildren...)
-		// 内存的两列明细需要约 38 格内宽。正常按 3:2 分栏；不足时向右侧
-		// AI/Docker/Caddy 服务栏借少量宽度，保证内存至少 42 格外宽。
-		lower := grid.Row(left.WithWidth(leftWidth), right.WithWidth(width-leftWidth))
-		return grid.Col(grid.Leaf(panelCPUWide).WithWeight(3), lower.WithWeight(7))
+		valid := true
+		for _, v := range values {
+			if v <= 0 || v > 1<<20 {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			out[key] = append([]int(nil), values...)
+		}
 	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
-	right := []grid.Node{grid.Leaf(panelNet)}
-	if len(usage) > 0 {
-		right = append(right, usageRow)
+func (m Model) hasVisiblePanels() bool {
+	for _, id := range []string{
+		PanelCPU, PanelMem, PanelNet, PanelDisk, PanelDocker, PanelCaddy, PanelOpenCode, PanelCmdCode,
+	} {
+		if m.PanelVisible(id) {
+			return true
+		}
 	}
-	left := grid.Col(grid.Leaf(panelMem), grid.Leaf(panelDisk))
-	bottom := grid.Row(left, grid.Col(right...)).WithWeight(4)
-	return grid.Col(grid.Leaf(panelCPU).WithWeight(3), bottom)
+	return false
 }
 
 // serviceStrip 是窄屏底部的两行无框摘要；宽屏返回 nil（状态卡已在网格里）。
 func (m Model) serviceStrip(width int) []string {
-	lines := []string{
-		m.dockerSummary(width),
-		m.caddySummary(width),
+	if width >= WideLayoutWidth {
+		return nil
+	}
+	var lines []string
+	if m.PanelVisible(PanelDocker) {
+		lines = append(lines, m.dockerSummary(width))
+	}
+	if m.PanelVisible(PanelCaddy) {
+		lines = append(lines, m.caddySummary(width))
 	}
 	for i := range lines {
 		lines[i] = chart.PadTo(chart.ClampTo(lines[i], width), width)
@@ -175,37 +392,256 @@ func (m Model) serviceStrip(width int) []string {
 	return lines
 }
 
+func (m Model) serviceStripCount() int {
+	n := 0
+	if m.PanelVisible(PanelDocker) {
+		n++
+	}
+	if m.PanelVisible(PanelCaddy) {
+		n++
+	}
+	return n
+}
+
+func (m Model) servicePanelAt(index int) string {
+	if index < 0 {
+		return ""
+	}
+	i := 0
+	for _, id := range []string{PanelDocker, PanelCaddy} {
+		if !m.PanelVisible(id) {
+			continue
+		}
+		if i == index {
+			return id
+		}
+		i++
+	}
+	return ""
+}
+
+func (m Model) resolveGrid(width, height int) ([]grid.Placement, []grid.Divider, int) {
+	gridH := height
+	if width < WideLayoutWidth {
+		gridH -= m.serviceStripCount()
+	}
+	if width <= 0 || gridH <= 0 {
+		return nil, nil, gridH
+	}
+	pl, dividers := grid.Resolve(width, gridH, m.tree(width))
+	return pl, dividers, gridH
+}
+
+type dividerRef struct {
+	key   string
+	index int
+	axis  grid.Axis
+}
+
+// DragHandle 是一次正在进行的分隔线拖动；外部只需原样传给 monitor。
+type DragHandle struct {
+	ref    dividerRef
+	offset int
+}
+
+// HitDivider 把内容区坐标映射到内部共享边框。命中返回的 handle 可交给
+// DragDivider 持续调整；不会修改模型状态。
+func (m Model) HitDivider(x, y, width, height int) (DragHandle, bool) {
+	d, ok := m.dividerAt(x, y, width, height)
+	if !ok {
+		return DragHandle{}, false
+	}
+	offset := x - dividerBoundary(d)
+	if d.Axis == grid.Horizontal {
+		offset = y - dividerBoundary(d)
+	}
+	return DragHandle{
+		ref:    dividerRef{key: d.Key, index: d.Index, axis: d.Axis},
+		offset: offset,
+	}, true
+}
+
+func (m Model) dividerAt(x, y, width, height int) (grid.Divider, bool) {
+	if width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width || y >= height {
+		return grid.Divider{}, false
+	}
+	_, dividers, gridH := m.resolveGrid(width, height)
+	if y >= gridH {
+		return grid.Divider{}, false
+	}
+	var (
+		best  grid.Divider
+		bestD = -1
+		ok    bool
+	)
+	for _, d := range dividers {
+		if x < d.X || x >= d.X+d.W || y < d.Y || y >= d.Y+d.H {
+			continue
+		}
+		dist := 0
+		if d.Axis == grid.Vertical {
+			dist = abs(x - dividerBoundary(d))
+		} else {
+			dist = abs(y - dividerBoundary(d))
+		}
+		if !ok || dist < bestD {
+			best, bestD, ok = d, dist, true
+		}
+	}
+	return best, ok
+}
+
+func dividerBoundary(d grid.Divider) int {
+	total := 0
+	for i := 0; i <= d.Index && i < len(d.Sizes); i++ {
+		total += d.Sizes[i]
+	}
+	return d.Start + total
+}
+
+func dividerByRef(dividers []grid.Divider, ref dividerRef) (grid.Divider, bool) {
+	for _, d := range dividers {
+		if d.Key == ref.key && d.Index == ref.index && d.Axis == ref.axis {
+			return d, true
+		}
+	}
+	return grid.Divider{}, false
+}
+
+// BeginDividerDrag 命中边框后进入拖动态，并记录按下点相对边框线的偏移。
+func (m Model) BeginDividerDrag(x, y, width, height int) (Model, DragHandle, bool) {
+	h, ok := m.HitDivider(x, y, width, height)
+	if !ok {
+		return m, DragHandle{}, false
+	}
+	active := h.ref
+	m.layoutActive = &active
+	return m, h, true
+}
+
+// DragDivider 把鼠标位置换算成相邻两根轨道的整数尺寸。只改这对邻居，
+// 其他轨道保持不变，因此不会破坏铺满、不重叠的布局不变量。
+func (m Model) DragDivider(h DragHandle, x, y, width, height int) Model {
+	_, dividers, gridH := m.resolveGrid(width, height)
+	if gridH <= 0 {
+		return m
+	}
+	d, ok := dividerByRef(dividers, h.ref)
+	if !ok || d.Index < 0 || d.Index+1 >= len(d.Sizes) {
+		return m
+	}
+
+	pointer := y
+	if d.Axis == grid.Vertical {
+		pointer = x
+	}
+	pair := d.Sizes[d.Index] + d.Sizes[d.Index+1]
+	minBefore := min(max(d.MinBefore, 1), pair-1)
+	minAfter := min(max(d.MinAfter, 1), pair-minBefore)
+	maxBefore := pair - minAfter
+	if maxBefore < minBefore {
+		minBefore = max(1, pair/2)
+		minAfter = max(1, pair-minBefore)
+		maxBefore = pair - minAfter
+	}
+	before := pointer - h.offset - d.Start
+	before = max(min(before, maxBefore), minBefore)
+	after := pair - before
+
+	changed := before != d.Sizes[d.Index] || after != d.Sizes[d.Index+1]
+	if changed {
+		shares := append([]int(nil), d.Sizes...)
+		shares[d.Index], shares[d.Index+1] = before, after
+		m = m.withLayoutShares(d.Key, shares)
+	}
+	active := h.ref
+	m.layoutActive = &active
+	return m
+}
+
+// EndDividerDrag 清除拖动高亮；已经落位的比例继续保留，供框架写回配置。
+func (m Model) EndDividerDrag() Model {
+	m.layoutActive = nil
+	return m
+}
+
+func (m Model) withLayoutShares(key string, shares []int) Model {
+	next := make(map[string][]int, len(m.layoutShares)+1)
+	for k, v := range m.layoutShares {
+		next[k] = v
+	}
+	next[key] = append([]int(nil), shares...)
+	m.layoutShares = next
+	return m
+}
+
+func (m Model) activeDivider(dividers []grid.Divider) (grid.Divider, bool) {
+	if m.layoutActive == nil {
+		return grid.Divider{}, false
+	}
+	return dividerByRef(dividers, *m.layoutActive)
+}
+
+func (m Model) highlightDivider(lines []string, width, height int, dividers []grid.Divider) []string {
+	d, ok := m.activeDivider(dividers)
+	if !ok || width <= 0 || height <= 0 {
+		return lines
+	}
+	if d.X < 0 || d.Y < 0 || d.X >= width || d.Y >= height {
+		return lines
+	}
+
+	base := make([]string, height)
+	for i := range base {
+		line := ""
+		if i < len(lines) {
+			line = chart.ClampTo(lines[i], width)
+		}
+		base[i] = chart.PadTo(line, width)
+	}
+	canvas := lipgloss.NewCanvas(width, height)
+	layer := lipgloss.NewLayer(strings.Join(base, "\n"))
+	layer.Draw(canvas, image.Rect(0, 0, width, height))
+	fg, bg := lipgloss.Color("230"), lipgloss.Color("68")
+	for y := max(d.Y, 0); y < min(d.Y+d.H, height); y++ {
+		for x := max(d.X, 0); x < min(d.X+d.W, width); x++ {
+			cell := canvas.CellAt(x, y)
+			if cell == nil {
+				continue
+			}
+			cell.Style.Fg = fg
+			cell.Style.Bg = bg
+		}
+	}
+	out := strings.Split(canvas.Render(), "\n")
+	for i := range base {
+		line := ""
+		if i < len(out) {
+			line = chart.ClampTo(out[i], width)
+		}
+		base[i] = chart.PadTo(line, width)
+	}
+	return base
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 // HitPanel 把系统状态页内容坐标映射到面板 ID；只覆盖图表/摘要条模式。
 func (m Model) HitPanel(x, y, width, height int) string {
 	if width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width {
 		return ""
 	}
-	if width >= WideLayoutWidth {
-		pl := grid.Solve(width, height, m.tree(width))
-		if pl == nil {
-			return ""
-		}
-		for _, p := range pl {
-			r := p.Rect
-			if x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H {
-				return p.Panel.ID
-			}
-		}
-		return ""
+	pl, _, gridH := m.resolveGrid(width, height)
+	if width < WideLayoutWidth && y >= gridH {
+		return m.servicePanelAt(y - gridH)
 	}
-	gridH := height - serviceStripH
-	if gridH <= 0 {
-		return ""
-	}
-	pl := grid.Solve(width, gridH, m.tree(width))
 	if pl == nil {
 		return ""
-	}
-	if y == gridH {
-		return PanelDocker
-	}
-	if y == gridH+1 {
-		return PanelCaddy
 	}
 	for _, p := range pl {
 		r := p.Rect
@@ -222,14 +658,7 @@ func (m Model) HitPanelTitle(x, y, width, height int) string {
 	if width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width {
 		return ""
 	}
-	gridH := height
-	if width < WideLayoutWidth {
-		gridH -= serviceStripH
-		if gridH <= 0 {
-			return ""
-		}
-	}
-	pl := grid.Solve(width, gridH, m.tree(width))
+	pl, _, _ := m.resolveGrid(width, height)
 	if pl == nil {
 		return ""
 	}
@@ -260,7 +689,8 @@ func (m Model) panelRect(id string, width, height int) (grid.Rect, bool) {
 	if width < WideLayoutWidth || width <= 0 || height <= 0 {
 		return grid.Rect{}, false
 	}
-	for _, p := range grid.Solve(width, height, m.tree(width)) {
+	pl, _, _ := m.resolveGrid(width, height)
+	for _, p := range pl {
 		if p.Panel.ID == id {
 			return p.Rect, true
 		}
@@ -418,6 +848,9 @@ func (m Model) compose(width, height int, pl []grid.Placement) []string {
 
 // PanelLines 渲染单块面板，供框架做「点击放大」：宽高是整块内容区。
 func (m Model) PanelLines(id string, w, h int) []string {
+	if !m.PanelVisible(id) {
+		return nil
+	}
 	switch id {
 	case PanelCPU:
 		return chart.ClampLines(m.cpuExpandedPanel(w, h), w)
@@ -1738,6 +2171,21 @@ func centerPanelMessages(width, height int, messages ...string) []string {
 	return lines
 }
 
+// messageLines 在整页内容区居中显示一条短提示，并保证每行恰好 width 格。
+func messageLines(width, height int, message string) []string {
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+	out := make([]string, height)
+	for i := range out {
+		out[i] = strings.Repeat(" ", width)
+	}
+	text := chart.ClampTo(chart.Text.Render(message), width)
+	gap := max(width-lipgloss.Width(text), 0)
+	out[height/2] = strings.Repeat(" ", gap/2) + text + strings.Repeat(" ", gap-gap/2)
+	return out
+}
+
 // compactLines 是紧凑模式：每面板 1 行数值、无线框，按 CPU/内存/网络/磁盘/用量 的顺序。
 // 返回自然高度（可能超过一屏），由框架滚动。
 func (m Model) compactLines(width int) []string {
@@ -1773,13 +2221,24 @@ func (m Model) compactLines(width int) []string {
 		}
 	}
 
-	lines := []string{
-		chart.FitFields(cpuFields, " ", width),
-		chart.FitFields(memFields, " ", width),
-		chart.FitFields(netFields, " ", width),
-		chart.FitFields(diskFields, " ", width),
-		m.dockerSummary(width),
-		m.caddySummary(width),
+	var lines []string
+	if m.PanelVisible(PanelCPU) {
+		lines = append(lines, chart.FitFields(cpuFields, " ", width))
+	}
+	if m.PanelVisible(PanelMem) {
+		lines = append(lines, chart.FitFields(memFields, " ", width))
+	}
+	if m.PanelVisible(PanelNet) {
+		lines = append(lines, chart.FitFields(netFields, " ", width))
+	}
+	if m.PanelVisible(PanelDisk) {
+		lines = append(lines, chart.FitFields(diskFields, " ", width))
+	}
+	if m.PanelVisible(PanelDocker) {
+		lines = append(lines, m.dockerSummary(width))
+	}
+	if m.PanelVisible(PanelCaddy) {
+		lines = append(lines, m.caddySummary(width))
 	}
 	for _, p := range m.providers() {
 		fields := []string{chart.Title.Render(p.title)}
@@ -1799,6 +2258,9 @@ func (m Model) compactLines(width int) []string {
 			}
 		}
 		lines = append(lines, chart.FitFields(fields, " ", width))
+	}
+	if len(lines) == 0 {
+		lines = []string{chart.ClampTo("所有面板已隐藏 · 点 [ 设置 ] 显示", width)}
 	}
 	return lines
 }

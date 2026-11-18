@@ -85,7 +85,7 @@ func TestLinesNeverWrap(t *testing.T) {
 				// 注意不能用「行数 == h」判断模式：紧凑模式也可能恰好出 h 行。
 				gh := h
 				if w < WideLayoutWidth {
-					gh = h - serviceStripH
+					gh -= m.serviceStripCount()
 				}
 				chartMode := gh > 0 && grid.Solve(w, gh, m.tree(w)) != nil
 				if chartMode && len(lines) != h {
