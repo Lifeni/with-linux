@@ -1110,7 +1110,7 @@ func TestCaddyPanelScrollsDomainRows(t *testing.T) {
 	}
 
 	top := plainPage(m.caddyPanel(50, 8))
-	if !strings.Contains(top, "domain-01.example") || strings.Contains(top, "domain-06.example") || strings.Contains(top, "API ") {
+	if !strings.Contains(top, "domain-01.example") || strings.Contains(top, "domain-06.example") || strings.Contains(top, "API") {
 		t.Fatalf("Caddy 列表顶部视口不对：\n%s", top)
 	}
 	m.caddyScroll = 5
@@ -1124,10 +1124,12 @@ func TestCaddyPanelScrollsDomainRows(t *testing.T) {
 	}
 	m.caddyScroll = 100
 	end := plainPage(m.caddyPanel(50, 8))
-	if !strings.Contains(end, "domain-10.example") || !strings.Contains(end, "API") ||
-		!strings.Contains(end, "http://127.0.0.1:2019") ||
+	if !strings.Contains(end, "domain-10.example") ||
 		!strings.Contains(end, "文件") || !strings.Contains(end, "/tmp/Caddyfile") {
-		t.Fatalf("Caddy 列表末端应显示 API 与配置文件：\n%s", end)
+		t.Fatalf("Caddy 列表末端应显示配置文件：\n%s", end)
+	}
+	if strings.Contains(end, "API") || strings.Contains(end, "http://127.0.0.1:2019") {
+		t.Fatalf("Caddy 主卡不应显示 API 行：\n%s", end)
 	}
 }
 
@@ -1143,6 +1145,13 @@ func TestCaddyShortListKeepsOriginalColors(t *testing.T) {
 	}
 
 	raw := strings.Join(m.caddyPanel(50, 12), "\n")
+	page := plainPage(m.caddyPanel(50, 12))
+	if strings.Contains(page, "API") || strings.Contains(page, "http://127.0.0.1:2019") {
+		t.Errorf("Caddy 主卡不应显示 API 行：\n%s", page)
+	}
+	if !strings.Contains(page, "文件") || !strings.Contains(page, "/tmp/Caddyfile") {
+		t.Errorf("Caddy 主卡仍应显示配置文件行：\n%s", page)
+	}
 	for i := 0; i < 4; i++ {
 		needle := fmt.Sprintf("domain-%02d.example", i+1)
 		line := rawLineContaining(raw, needle)

@@ -742,7 +742,7 @@ func (m Model) caddyBodyCount() int {
 	if len(m.caddySnap.Domains) == 0 {
 		n++ // “暂无域名”
 	}
-	return n + 2 // API 与配置文件
+	return n + 1 // 配置文件
 }
 
 func dockerListRows(innerH int) int {
@@ -1968,7 +1968,7 @@ func (m Model) caddyPanel(w, h int) []string {
 		{label: "上游", value: healthValue, style: healthStyle},
 		{label: "请求", value: strconv.Itoa(s.Requests), style: chart.Dim},
 	}, innerW, 4)
-	body := make([]string, 0, max(len(s.Domains), len(s.Upstreams))+3)
+	body := make([]string, 0, max(len(s.Domains), len(s.Upstreams))+2)
 	rows := max(len(s.Domains), len(s.Upstreams))
 	for i := 0; i < rows; i++ {
 		left, right := chart.Dim.Render("—"), chart.Dim.Render("—")
@@ -1989,7 +1989,6 @@ func (m Model) caddyPanel(w, h int) []string {
 		body = append(body, centerPanelMessages(innerW, 1, chart.Dim.Render("暂无域名"))...)
 	}
 	body = append(body,
-		metricLine(metricCell{label: "API", value: s.AdminURL, style: chart.Dim}, innerW),
 		metricLine(metricCell{label: "文件", value: s.ConfigPath, style: chart.Dim}, innerW),
 	)
 	visibleRows := caddyListRows(innerH)
