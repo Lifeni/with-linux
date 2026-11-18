@@ -2,9 +2,14 @@
 # 本地构建 .deb（无 goreleaser 依赖）。用法：bash scripts/mkdeb.sh [goarch]
 set -euo pipefail
 ARCH="${1:-$(dpkg --print-architecture)}"
-# 版本号：显式 VERSION 优先；否则取最近 tag ＋ ~dev。
-# `~` 让本地包排序**低于**正式版（dpkg: 0.2.0~dev < 0.2.0），
-# 免得本地包装过之后改回正式版还要 --allow-downgrades。
+# 版本号：显式 VERSION 优先；否则读取仓库根 VERSION 文件（开发期固定版本）；
+# 仅当文件缺失时才回退最近 tag ＋ ~dev（`~` 让临时包排序低于正式版）。
+if [ -z "${VERSION:-}" ]; then
+  ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  if [ -f "$ROOT_DIR/VERSION" ]; then
+    VERSION=$(head -n1 "$ROOT_DIR/VERSION" | tr -d '[:space:]')
+  fi
+fi
 if [ -z "${VERSION:-}" ]; then
   if tag=$(git describe --tags --abbrev=0 2>/dev/null) && [ -n "$tag" ]; then
     VERSION="${tag#v}~dev"
