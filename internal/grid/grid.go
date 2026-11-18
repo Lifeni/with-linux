@@ -47,6 +47,8 @@ type Node struct {
 	col    []Node
 	weight int // 在父 Col 里的高度权重
 	width  int // 在父 Row 里的宽度权重（默认 1，均分）
+	key    string
+	shares []int // 拖动后的轨道比例；行按宽度、列按高度解释
 }
 
 // Leaf 造一个面板叶子。
@@ -70,41 +72,121 @@ func (n Node) WithWidth(w int) Node {
 	return n
 }
 
+// WithKey 给容器节点一个稳定标识，供鼠标拖动分隔线时回写轨道比例。
+func (n Node) WithKey(key string) Node {
+	n.key = key
+	return n
+}
+
+// WithShares 设置容器各子轨道的比例。拖动期间比例来自当前网格尺寸，
+// 因而一次鼠标位移能直接映射为字符格，而不是被默认权重重新揉开。
+func (n Node) WithShares(shares ...int) Node {
+	n.shares = append([]int(nil), shares...)
+	return n
+}
+
+// Axis 是分隔线的方向：Vertical 调左右宽度，Horizontal 调上下高度。
+type Axis int
+
+const (
+	Vertical Axis = iota
+	Horizontal
+)
+
+// Divider 是容器内部相邻两块子节点之间的可拖动边界。
+// X/Y/W/H 是拖动热区与高亮范围：只取左侧/上侧那块面板的边框，
+// 避免抢占右侧/下侧面板的标题行点击（标题行仍用于放大）。
+type Divider struct {
+	Key       string
+	Index     int
+	Axis      Axis
+	X, Y      int
+	W, H      int
+	Start     int
+	Total     int
+	Sizes     []int
+	MinBefore int
+	MinAfter  int
+}
+
 // Solve 算出每块面板的矩形：互不重叠，合起来正好铺满 width×height（行内间隙除外）。
 // 放不下（连 FloorH 都满足不了）或宽高非正时返回 nil，调用方据此进紧凑模式。
 func Solve(width, height int, root Node) []Placement {
+	pl, _ := Resolve(width, height, root)
+	return pl
+}
+
+// Resolve 在 Solve 的基础上同时返回可拖动的内部共享边界。
+func Resolve(width, height int, root Node) ([]Placement, []Divider) {
 	if width <= 0 || height <= 0 {
-		return nil
+		return nil, nil
 	}
+	singleColumn := width < SingleColumnWidth
 	if width < SingleColumnWidth {
 		if leaves := collectLeaves(root); len(leaves) > 0 {
 			root = Col(leaves...)
 		}
 	}
 	if root.floor() > height {
-		return nil
+		return nil, nil
 	}
 	var out []Placement
-	place(root, Rect{X: 0, Y: 0, W: width, H: height}, &out)
-	return out
+	var dividers []Divider
+	place(root, Rect{X: 0, Y: 0, W: width, H: height}, &out, &dividers)
+	if singleColumn {
+		dividers = nil // 单列紧凑堆叠不做拖动，避免把相邻面板挤到一列之外
+	}
+	return out, dividers
 }
 
-func place(n Node, r Rect, out *[]Placement) {
+func place(n Node, r Rect, out *[]Placement, dividers *[]Divider) {
 	switch {
 	case n.panel != nil:
 		*out = append(*out, Placement{Panel: *n.panel, Rect: r})
 	case len(n.row) > 0:
-		widths := rowWidths(r.W, n.row)
+		widths := rowWidths(r.W, n.row, n.shares)
 		x := r.X
 		for i, c := range n.row {
-			place(c, Rect{X: x, Y: r.Y, W: widths[i], H: r.H}, out)
+			if n.key != "" && i > 0 {
+				*dividers = append(*dividers, Divider{
+					Key:       n.key,
+					Index:     i - 1,
+					Axis:      Vertical,
+					X:         x - 1,
+					Y:         r.Y,
+					W:         1,
+					H:         r.H,
+					Start:     r.X,
+					Total:     r.W,
+					Sizes:     append([]int(nil), widths...),
+					MinBefore: minRowTrack(r.W, len(n.row)),
+					MinAfter:  minRowTrack(r.W, len(n.row)),
+				})
+			}
+			place(c, Rect{X: x, Y: r.Y, W: widths[i], H: r.H}, out, dividers)
 			x += widths[i] + ColGap
 		}
 	case len(n.col) > 0:
-		heights := allocateCol(n.col, r.H)
+		heights := allocateCol(n.col, n.shares, r.H)
 		y := r.Y
 		for i, c := range n.col {
-			place(c, Rect{X: r.X, Y: y, W: r.W, H: heights[i]}, out)
+			if n.key != "" && i > 0 {
+				*dividers = append(*dividers, Divider{
+					Key:       n.key,
+					Index:     i - 1,
+					Axis:      Horizontal,
+					X:         r.X,
+					Y:         y - 1,
+					W:         r.W,
+					H:         1,
+					Start:     r.Y,
+					Total:     r.H,
+					Sizes:     append([]int(nil), heights...),
+					MinBefore: n.col[i-1].floor(),
+					MinAfter:  n.col[i].floor(),
+				})
+			}
+			place(c, Rect{X: r.X, Y: y, W: r.W, H: heights[i]}, out, dividers)
 			y += heights[i]
 		}
 	}
@@ -131,9 +213,9 @@ func collectLeaves(n Node) []Node {
 	return nil
 }
 
-// rowWidths 按宽度权重把 width 分给子节点（中间留 ColGap）。
-// 默认权重均为 1 → 行为与旧的均分完全一致；显式 WithWidth 可做左宽右窄。
-func rowWidths(width int, nodes []Node) []int {
+// rowWidths 把 width 分给子节点（中间留 ColGap）：显式 shares 优先，
+// 否则使用 WithWidth/默认均分，保持旧布局不变。
+func rowWidths(width int, nodes []Node, shares []int) []int {
 	n := len(nodes)
 	if n <= 0 {
 		return nil
@@ -143,6 +225,17 @@ func rowWidths(width int, nodes []Node) []int {
 		gapTotal = n // 极窄：每块至少 1 格，超出部分由调用方截断
 	}
 	weights := make([]int, n)
+	if len(shares) == n {
+		for i := range shares {
+			weights[i] = max(1, shares[i])
+		}
+		floorW := minRowTrack(gapTotal, n)
+		floors := make([]int, n)
+		for i := range floors {
+			floors[i] = floorW
+		}
+		return allocateShares(weights, floors, gapTotal)
+	}
 	for i, node := range nodes {
 		weights[i] = node.widthOr1()
 	}
@@ -155,9 +248,9 @@ func rowWidths(width int, nodes []Node) []int {
 	return widths
 }
 
-// allocateCol 决定一列里每个子节点的高度：先按下限保底，再按权重长到舒适高度，
-// 然后按 WantH 收敛（用不到的收回来给别人），最后仍有剩余就按权重摊掉——保证总和等于 height。
-func allocateCol(nodes []Node, height int) []int {
+// allocateCol 决定一列里每个子节点的高度：显式 shares 优先按比例铺满，
+// 否则先按下限保底，再按权重长到舒适高度，然后按 WantH 收敛，最后摊掉余数。
+func allocateCol(nodes []Node, shares []int, height int) []int {
 	floors := make([]int, len(nodes))
 	mins := make([]int, len(nodes))
 	wants := make([]int, len(nodes))
@@ -169,6 +262,10 @@ func allocateCol(nodes []Node, height int) []int {
 		weights[i] = n.weightOr1()
 	}
 
+	if len(shares) == len(nodes) {
+		return allocateShares(shares, floors, height)
+	}
+
 	h := append([]int(nil), floors...)
 	h = growToward(h, mins, weights, height)
 	if hasPositive(wants) {
@@ -176,6 +273,55 @@ func allocateCol(nodes []Node, height int) []int {
 		h = growToward(h, wants, weights, height)
 	}
 	return growToward(h, nil, weights, height)
+}
+
+// allocateShares 按拖动后的比例铺满 height，并把每块夹到自己的 FloorH；
+// 极端 resize 下若比例把某块压得过小，会从仍高于下限的邻居回收差额。
+func allocateShares(shares, floors []int, height int) []int {
+	weights := make([]int, len(shares))
+	for i, share := range shares {
+		weights[i] = max(1, share)
+	}
+	h := largestRemainder(height, weights)
+	for i := range h {
+		if h[i] < floors[i] {
+			h[i] = floors[i]
+		}
+	}
+	overflow := sum(h) - height
+	for overflow > 0 {
+		var idx []int
+		var spill []int
+		for i := range h {
+			if h[i] > floors[i] {
+				idx = append(idx, i)
+				spill = append(spill, h[i]-floors[i])
+			}
+		}
+		if len(idx) == 0 {
+			break
+		}
+		cut := largestRemainder(overflow, spill)
+		moved := 0
+		for k, i := range idx {
+			cut[k] = min(cut[k], spill[k])
+			h[i] -= cut[k]
+			moved += cut[k]
+		}
+		if moved == 0 {
+			break
+		}
+		overflow -= moved
+	}
+	return h
+}
+
+func minRowTrack(total, children int) int {
+	if children <= 0 {
+		return 1
+	}
+	// 20 格足够放下面板标题与一行数值；更窄时按均分下限继续退化。
+	return max(1, min(20, total/children))
 }
 
 // growToward 把「height − 已分配」按权重分给还没到 caps 的子节点，直到分完或没人能长。

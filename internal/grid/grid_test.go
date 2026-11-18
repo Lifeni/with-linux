@@ -258,6 +258,129 @@ func TestDegenerateInputs(t *testing.T) {
 	}
 }
 
+func TestResolveDividersUseUpperOrLeftBorder(t *testing.T) {
+	root := Col(
+		Leaf(chartPanel("top", 5, 3)),
+		Row(
+			Leaf(chartPanel("left", 5, 3)),
+			Leaf(chartPanel("right", 5, 3)),
+		).WithKey("row"),
+	).WithKey("root")
+	pl, dividers := Resolve(100, 20, root)
+	if len(pl) == 0 {
+		t.Fatal("布局不应为空")
+	}
+	if len(dividers) != 2 {
+		t.Fatalf("分隔线 = %d, want 2", len(dividers))
+	}
+
+	var rootDiv, rowDiv *Divider
+	for i := range dividers {
+		switch dividers[i].Key {
+		case "root":
+			rootDiv = &dividers[i]
+		case "row":
+			rowDiv = &dividers[i]
+		}
+	}
+	if rootDiv == nil || rowDiv == nil {
+		t.Fatalf("缺少分隔线：%+v", dividers)
+	}
+	if rootDiv.Axis != Horizontal || rootDiv.W != 100 || rootDiv.H != 1 {
+		t.Errorf("水平分隔线 = %+v, want 整宽 1 行（下方面板标题行不抢点击）", rootDiv)
+	}
+	if rowDiv.Axis != Vertical || rowDiv.W != 1 || rowDiv.H <= 0 {
+		t.Errorf("垂直分隔线 = %+v, want 1 列（右侧面板内容区不抢点击）", rowDiv)
+	}
+	if got, want := dividerStart(*rootDiv)+dividerSize(*rootDiv), byID(pl)["left"].Y; got != want {
+		t.Errorf("水平边界 = %d, want %d", got, want)
+	}
+	if got, want := dividerStart(*rowDiv)+dividerSize(*rowDiv), byID(pl)["right"].X; got != want {
+		t.Errorf("垂直边界 = %d, want %d", got, want)
+	}
+}
+
+func TestSharesFollowPointerAndSurviveResize(t *testing.T) {
+	row := Row(
+		Leaf(chartPanel("a", 5, 3)),
+		Leaf(chartPanel("b", 5, 3)),
+	).WithKey("row").WithShares(32, 48)
+	pl := Solve(80, 10, row)
+	r := byID(pl)
+	if r["a"].W != 32 || r["b"].W != 48 {
+		t.Fatalf("宽度 = %d/%d, want 32/48", r["a"].W, r["b"].W)
+	}
+
+	pl = Solve(160, 10, row)
+	r = byID(pl)
+	if r["a"].W != 64 || r["b"].W != 96 {
+		t.Errorf("resize 后宽度 = %d/%d, want 64/96（保持比例）", r["a"].W, r["b"].W)
+	}
+}
+
+func TestShareWidthsKeepMinimumAfterShrink(t *testing.T) {
+	row := Row(
+		Leaf(chartPanel("a", 5, 3)),
+		Leaf(chartPanel("b", 5, 3)),
+	).WithKey("row").WithShares(20, 140)
+	pl := Solve(121, 10, row)
+	r := byID(pl)
+	min := minRowTrack(121, 2)
+	if r["a"].W < min || r["b"].W < min {
+		t.Fatalf("缩窗后宽度 = %d/%d, want 都 >= %d", r["a"].W, r["b"].W, min)
+	}
+	if got := r["a"].W + r["b"].W; got != 121 {
+		t.Fatalf("缩窗后宽度和 = %d, want 121（仍铺满）", got)
+	}
+	checkNoOverlapOrOutOfBounds(t, 121, 10, pl)
+}
+
+func TestShareAllocationKeepsFloorsAndFillsHeight(t *testing.T) {
+	root := Col(
+		Leaf(Panel{ID: "a", MinH: 8, FloorH: 5, WantH: 8}),
+		Leaf(Panel{ID: "b", MinH: 8, FloorH: 5, WantH: 8}),
+	).WithKey("col").WithShares(1, 9)
+	pl := Solve(20, 20, root)
+	r := byID(pl)
+	if got := r["a"].H + r["b"].H; got != 20 {
+		t.Fatalf("高度和 = %d, want 20", got)
+	}
+	if r["a"].H < 5 || r["b"].H < 5 {
+		t.Fatalf("高度 = %d/%d, want 都 >= FloorH 5", r["a"].H, r["b"].H)
+	}
+}
+
+func TestSharesNeverOverlapAcrossSizes(t *testing.T) {
+	mem := chartPanel("mem", 8, 3)
+	disk := chartPanel("disk", 8, 3)
+	tree := Col(
+		Row(
+			Leaf(mem),
+			Leaf(disk),
+		).WithKey("memdisk").WithShares(73, 47),
+		Leaf(chartPanel("net", 7, 3)),
+	).WithKey("left").WithShares(18, 12)
+	for _, size := range [][2]int{{60, 14}, {80, 20}, {100, 28}, {160, 40}, {200, 16}} {
+		pl := Solve(size[0], size[1], tree)
+		if pl == nil {
+			continue
+		}
+		checkNoOverlapOrOutOfBounds(t, size[0], size[1], pl)
+	}
+}
+
+func dividerStart(d Divider) int {
+	return d.Start
+}
+
+func dividerSize(d Divider) int {
+	total := 0
+	for i := 0; i <= d.Index && i < len(d.Sizes); i++ {
+		total += d.Sizes[i]
+	}
+	return total
+}
+
 func TestLargestRemainder(t *testing.T) {
 	cases := []struct {
 		total   int
