@@ -411,3 +411,120 @@ func TestShowFlagSavePreservesOtherFields(t *testing.T) {
 		t.Fatalf("未知字段被丢弃: %s", out)
 	}
 }
+
+func TestSystemPanelShowFlags(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	saves := []struct {
+		field string
+		value bool
+	}{
+		{"showCPU", false},
+		{"showMemory", true},
+		{"showNetwork", false},
+		{"showDisk", true},
+		{"showDocker", false},
+		{"showCaddy", true},
+	}
+	for _, tc := range saves {
+		var err error
+		switch tc.field {
+		case "showCPU":
+			err = SaveShowCPU(tc.value)
+		case "showMemory":
+			err = SaveShowMemory(tc.value)
+		case "showNetwork":
+			err = SaveShowNetwork(tc.value)
+		case "showDisk":
+			err = SaveShowDisk(tc.value)
+		case "showDocker":
+			err = SaveShowDocker(tc.value)
+		case "showCaddy":
+			err = SaveShowCaddy(tc.value)
+		}
+		if err != nil {
+			t.Fatalf("保存 %s 出错: %v", tc.field, err)
+		}
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := []struct {
+		field string
+		ptr   *bool
+		want  bool
+	}{
+		{"showCPU", cfg.ShowCPU, false},
+		{"showMemory", cfg.ShowMemory, true},
+		{"showNetwork", cfg.ShowNetwork, false},
+		{"showDisk", cfg.ShowDisk, true},
+		{"showDocker", cfg.ShowDocker, false},
+		{"showCaddy", cfg.ShowCaddy, true},
+	}
+	for _, tc := range checks {
+		if tc.ptr == nil || *tc.ptr != tc.want {
+			t.Fatalf("%s = %v, want %v", tc.field, tc.ptr, tc.want)
+		}
+	}
+}
+
+func TestSystemPanelShowFlagsAbsentAreNil(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `{"openCodeApiKey":"k"}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShowCPU != nil || cfg.ShowMemory != nil || cfg.ShowNetwork != nil ||
+		cfg.ShowDisk != nil || cfg.ShowDocker != nil || cfg.ShowCaddy != nil {
+		t.Fatalf("缺省的面板开关应为 nil: %+v", cfg)
+	}
+}
+
+func TestSaveLayoutSharesPreservesOtherFields(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeConfig(t, `{"openCodeApiKey":"fake","fillStyle":"dot"}`)
+
+	want := map[string][]int{
+		"wide.main": {100, 60},
+		"wide.left": {7, 9},
+	}
+	if err := SaveLayoutShares(want); err != nil {
+		t.Fatalf("SaveLayoutShares 出错: %v", err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.OpenCodeAPIKey; got != "fake" {
+		t.Fatalf("保存布局改坏了 key: %q", got)
+	}
+	if len(cfg.LayoutShares) != len(want) {
+		t.Fatalf("layoutShares = %+v, want %+v", cfg.LayoutShares, want)
+	}
+	for key, values := range want {
+		got := cfg.LayoutShares[key]
+		if len(got) != len(values) {
+			t.Fatalf("%s = %v, want %v", key, got, values)
+		}
+		for i := range values {
+			if got[i] != values[i] {
+				t.Fatalf("%s = %v, want %v", key, got, values)
+			}
+		}
+	}
+
+	raw, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("写回不是合法 JSON: %v", err)
+	}
+	if _, ok := fields["fillStyle"]; !ok {
+		t.Fatalf("保存布局丢了未知字段: %s", raw)
+	}
+}

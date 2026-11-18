@@ -20,6 +20,17 @@ type Config struct {
 	// （填了 key 自动展示一次）；显式 true/false 尊重用户选择，不再自动打开。
 	ShowOpenCode    *bool `json:"showOpenCode"`
 	ShowCommandCode *bool `json:"showCommandCode"`
+	// 系统状态页各面板的展示开关。nil 表示从未设置，默认显示；
+	// 显式 false 才隐藏，避免旧配置升级后突然少掉面板。
+	ShowCPU     *bool `json:"showCPU"`
+	ShowMemory  *bool `json:"showMemory"`
+	ShowNetwork *bool `json:"showNetwork"`
+	ShowDisk    *bool `json:"showDisk"`
+	ShowDocker  *bool `json:"showDocker"`
+	ShowCaddy   *bool `json:"showCaddy"`
+	// LayoutShares 保存拖动后的面板宽高比例，键是稳定的布局分隔标识。
+	// 缺省 nil 表示使用默认布局；与当前子轨道数量不匹配的条目会被渲染层忽略。
+	LayoutShares map[string][]int `json:"layoutShares"`
 }
 
 // LoadKind 区分配置缺失、损坏和无法读取，供界面给出准确提示。
@@ -158,6 +169,37 @@ func SaveShowOpenCode(v bool) error {
 
 func SaveShowCommandCode(v bool) error {
 	return saveValue(Path(), "showCommandCode", v)
+}
+
+// SaveShowCPU / SaveShowMemory / SaveShowNetwork / SaveShowDisk / SaveShowDocker / SaveShowCaddy
+// 写回系统状态页面板的展示开关，语义与 Save 一致（只改这一个字段）。
+func SaveShowCPU(v bool) error {
+	return saveValue(Path(), "showCPU", v)
+}
+
+func SaveShowMemory(v bool) error {
+	return saveValue(Path(), "showMemory", v)
+}
+
+func SaveShowNetwork(v bool) error {
+	return saveValue(Path(), "showNetwork", v)
+}
+
+func SaveShowDisk(v bool) error {
+	return saveValue(Path(), "showDisk", v)
+}
+
+func SaveShowDocker(v bool) error {
+	return saveValue(Path(), "showDocker", v)
+}
+
+func SaveShowCaddy(v bool) error {
+	return saveValue(Path(), "showCaddy", v)
+}
+
+// SaveLayoutShares 写回拖动后的面板宽高比例，语义与 Save 一致（只改这一个字段）。
+func SaveLayoutShares(shares map[string][]int) error {
+	return saveValue(Path(), "layoutShares", shares)
 }
 
 // saveValue 读原 JSON → 只改一个字段 → 原样保留其他字段 → 写回（drop 里的字段被删除）。
