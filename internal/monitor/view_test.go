@@ -731,16 +731,16 @@ func TestExpandedCPUUsesMultirowCoreGraphs(t *testing.T) {
 	}
 }
 
-func TestExpandedNetworkShowsRightSideDetails(t *testing.T) {
+func TestExpandedNetworkShowsWideDetails(t *testing.T) {
 	m := testModel(t, false, false)
 	lines := m.PanelLines(PanelNet, 120, 30)
 	if len(lines) != 30 {
 		t.Fatalf("网络放大面板出了 %d 行, want 30", len(lines))
 	}
 	page := plainPage(lines)
-	for _, want := range []string{"速率", "接口", "enp1s0", "IPv4", "192.0.2.10", "累计", "错误"} {
+	for _, want := range []string{"接口", "enp1s0", "IPv4", "192.0.2.10", "累计", "错误"} {
 		if !strings.Contains(page, want) {
-			t.Errorf("网络放大面板右侧缺少 %q：\n%s", want, page)
+			t.Errorf("网络放大面板缺少 %q：\n%s", want, page)
 		}
 	}
 }
@@ -958,20 +958,38 @@ func TestNetIssueText(t *testing.T) {
 	}
 }
 
-func TestWideNetworkUsesRateSubBox(t *testing.T) {
+func TestWideNetworkUsesFullWidthStatsRow(t *testing.T) {
 	m := testModel(t, false, false)
-	wide := plainPage(m.netPanel(72, 10))
-	for _, want := range []string{"速率", "192.0.2.10", "↓ 下载", "↑ 上传", "↓ 累计", "↑ 累计", "35G", "23G"} {
-		if !strings.Contains(wide, want) {
-			t.Errorf("宽网络面板缺少 %q：\n%s", want, wide)
+	for _, size := range [][2]int{{72, 10}, {76, 8}} {
+		wide := plainPage(m.netPanel(size[0], size[1]))
+		for _, want := range []string{"192.0.2.10", "↑ 上传", "↓ 下载", "50K/s", "51K/s", "35G", "23G"} {
+			if !strings.Contains(wide, want) {
+				t.Errorf("%dx%d 宽网络面板缺少 %q：\n%s", size[0], size[1], want, wide)
+			}
+		}
+		if strings.Contains(wide, "速率") {
+			t.Errorf("%dx%d 宽网络面板不该再嵌套「速率」子框：\n%s", size[0], size[1], wide)
+		}
+		sameRow := false
+		for _, line := range strings.Split(wide, "\n") {
+			if strings.Contains(line, "↑ 上传") && strings.Contains(line, "↓ 下载") {
+				sameRow = true
+				break
+			}
+		}
+		if !sameRow {
+			t.Errorf("%dx%d 上传和下载应当排在同一行：\n%s", size[0], size[1], wide)
 		}
 	}
 	narrow := plainPage(m.netPanel(40, 10))
-	if strings.Contains(narrow, "速率") {
-		t.Errorf("窄网络面板不该塞子框：\n%s", narrow)
-	}
 	if !strings.Contains(narrow, "↓ 下载") || !strings.Contains(narrow, "↑ 上传") {
 		t.Errorf("窄网络面板应保留上下布局：\n%s", narrow)
+	}
+	narrowLines := strings.Split(narrow, "\n")
+	for _, line := range narrowLines {
+		if strings.Contains(line, "↑ 上传") && strings.Contains(line, "↓ 下载") {
+			t.Errorf("窄网络面板仍应上下分开，不能挤成一行：\n%s", narrow)
+		}
 	}
 }
 

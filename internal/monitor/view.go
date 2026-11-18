@@ -1134,57 +1134,42 @@ func statTitleLine(b statBlock, width int) string {
 	return left + " " + chart.Dim.Render(strings.Repeat("─", gap-2)) + " " + right
 }
 
-func renderStatBlocks(blocks []statBlock, width, height int, extras []string) []string {
-	if width <= 0 || height <= 0 {
-		return nil
+// statBlocksInlineRow 把多个统计块排成一行：各自左侧是标签、中间是短计量条、
+// 右侧是两端对齐的数值。块宽等分，余数从左到右分配。
+func statBlocksInlineRow(blocks []statBlock, width int) string {
+	if width <= 0 || len(blocks) == 0 {
+		return ""
 	}
-	type segment []string
-	segs := make([]segment, 0, len(blocks)+len(extras))
-	used := 0
-	for _, b := range blocks {
-		if used+2 > height {
-			break
-		}
-		segs = append(segs, segment{statTitleLine(b, width), chart.MeterH(b.pct, width, b.style)})
-		used += 2
+	widths := splitWidths(width, len(blocks), 2)
+	parts := make([]string, len(blocks))
+	for i, block := range blocks {
+		parts[i] = inlineStatLine(block, widths[i])
 	}
-	for _, line := range extras {
-		if used+1 > height {
-			break
-		}
-		segs = append(segs, segment{chart.Dim.Render(chart.ClampTo(line, width))})
-		used++
+	return chart.ClampTo(strings.Join(parts, "  "), width)
+}
+
+// inlineStatLine 是单行统计：标签贴左、数值贴右，中间最多放 18 格计量条。
+// 空间不够放条时退成 btop 式细线连接，仍保持两端对齐。
+func inlineStatLine(block statBlock, width int) string {
+	if width <= 0 {
+		return ""
 	}
-	if len(segs) == 0 {
-		return nil
+	label := chart.Text.Render(block.label)
+	value := block.style.Render(block.value)
+	labelW, valueW := lipgloss.Width(label), lipgloss.Width(value)
+	if valueW+labelW+3 > width {
+		return metricLine(metricCell{label: block.label, value: block.value, style: block.style}, width)
 	}
-	// btop 用线框把分类分开：高度富余时先给每个分类之间放一条分隔线，
-	// 再把剩下的空行均匀摊进间隙。没有富余时保持紧凑，绝不把标题和进度条拆开。
-	gaps := len(segs) - 1
-	seps := min(max(height-used, 0), gaps)
-	blanks := max(height-used-seps, 0)
-	out := make([]string, 0, height)
-	for i, seg := range segs {
-		out = append(out, seg...)
-		if i == len(segs)-1 {
-			continue
-		}
-		if seps > 0 {
-			out = append(out, chart.Dim.Render(strings.Repeat("─", width)))
-			seps--
-		}
-		if gaps > 0 && blanks > 0 {
-			out = append(out, "")
-			blanks--
-			gaps--
-		} else if gaps > 0 {
-			gaps--
-		}
+	meterW := min(max(width-labelW-valueW-3, 0), 18)
+	left := label
+	if meterW >= 4 {
+		left += " " + chart.MeterH(block.pct, meterW, block.style)
 	}
-	for len(out) < height {
-		out = append(out, "")
+	gap := width - lipgloss.Width(left) - valueW
+	if gap < 1 {
+		return chart.ClampTo(left+" "+value, width)
 	}
-	return out
+	return left + strings.Repeat(" ", gap) + value
 }
 
 // —— CPU ——
@@ -1569,14 +1554,9 @@ func (m Model) netPanel(w, h int) []string {
 		title += " " + n.IP
 	}
 
-	// 宽屏按 btop：左边是镜像曲线，右边是独立的「速率」子框。
-	if gw, dw, ok := splitColumns(innerW, 30, 24); ok && innerH >= 7 {
-		slots := historySlots(gw)
-		graph := chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, gw, innerH,
-			100, 100, chart.SeriesCyan, chart.SeriesBlue)
-		if box := m.netStatsBox(dw, innerH); box != nil {
-			return framed(title, value, zipColumns(graph, box, gw, dw, innerH), w, h)
-		}
+	// 宽屏：动态图横跨整宽，上传/下载并排放在底部两行。
+	if lines := m.netWideBody(innerW, innerH, n, false); lines != nil {
+		return framed(title, value, lines, w, h)
 	}
 
 	// 窄面板：图在上；下载/上传各占两行（标题+实时速率与累计 / 进度条），中间用细线分开。
@@ -1615,6 +1595,63 @@ func (m Model) netPanel(w, h int) []string {
 	return framed(title, value, lines[:min(len(lines), innerH)], w, h)
 }
 
+// netWideBody 是宽网络面板的共同主体：顶部动态图吃满整宽，底部左边上传、
+// 右边下载。展开态再补接口、IPv4 和错误/丢包明细。
+func (m Model) netWideBody(innerW, innerH int, n *sysstat.Net, expanded bool) []string {
+	if innerW < 56 || innerH < 5 {
+		return nil
+	}
+	scale := max(m.hist.netScale, netMinScale)
+	pct := func(v float64) float64 {
+		if !n.HasRate || scale <= 0 {
+			return 0
+		}
+		return v / scale * 100
+	}
+	rate := func(v float64) string {
+		if !n.HasRate {
+			return "[--]"
+		}
+		return chart.Rate(v)
+	}
+	blocks := []statBlock{
+		{"↑ 上传", rate(n.TxRate) + " · " + chart.Bytes(float64(n.TxTotal)), pct(n.TxRate), chart.SeriesCyan},
+		{"↓ 下载", rate(n.RxRate) + " · " + chart.Bytes(float64(n.RxTotal)), pct(n.RxRate), chart.SeriesBlue},
+	}
+	extras := make([]string, 0, 3)
+	if expanded {
+		ip := n.IP
+		if ip == "" {
+			ip = "[--]"
+		}
+		blocks[0].value = rate(n.TxRate)
+		blocks[1].value = rate(n.RxRate)
+		extras = append(extras, metricRows([]metricCell{
+			{label: "接口", value: n.Name, style: chart.Dim},
+			{label: "IPv4", value: ip, style: chart.Dim},
+		}, innerW, 2)...)
+		extras = append(extras, metricRows([]metricCell{
+			{label: "↓ 累计", value: chart.Bytes(float64(n.RxTotal)), style: chart.Dim},
+			{label: "↑ 累计", value: chart.Bytes(float64(n.TxTotal)), style: chart.Dim},
+		}, innerW, 2)...)
+	}
+	extras = append(extras, metricRows(netIssueCells(n), innerW, 2)...)
+
+	footerH := 1 + len(extras)
+	graphH := innerH - footerH
+	if graphH < 3 {
+		return nil
+	}
+	slots := historySlots(innerW)
+	graph := chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, innerW, graphH,
+		100, 100, chart.SeriesCyan, chart.SeriesBlue)
+	lines := make([]string, 0, innerH)
+	lines = append(lines, graph...)
+	lines = append(lines, statBlocksInlineRow(blocks, innerW))
+	lines = append(lines, extras...)
+	return lines
+}
+
 // netIssueText 只返回非零的错误/丢包计数，避免正常时多占一行。
 func netIssueText(n *sysstat.Net) string {
 	var parts []string
@@ -1642,57 +1679,15 @@ func netIssueCells(n *sysstat.Net) []metricCell {
 	return cells
 }
 
-// netStatsBox 是宽屏网络面板右侧的「速率」子框（btop 的 download/upload 小盒）。
-func (m Model) netStatsBox(w, h int) []string {
-	n := primaryNet(m.sample)
-	if n == nil || w < 12 || h < 4 {
-		return nil
-	}
-	innerW, innerH := w-4, h-2
-	scale := max(m.hist.netScale, netMinScale)
-	pct := func(v float64) float64 {
-		if !n.HasRate || scale <= 0 {
-			return 0
-		}
-		return v / scale * 100
-	}
-	rate := func(v float64) string {
-		if !n.HasRate {
-			return "[--]"
-		}
-		return chart.Rate(v)
-	}
-	blocks := []statBlock{
-		{"↓ 下载", rate(n.RxRate), pct(n.RxRate), chart.SeriesBlue},
-		{"↑ 上传", rate(n.TxRate), pct(n.TxRate), chart.SeriesCyan},
-	}
-	extras := metricRows([]metricCell{
-		{label: "↓ 累计", value: chart.Bytes(float64(n.RxTotal)), style: chart.Dim},
-		{label: "↑ 累计", value: chart.Bytes(float64(n.TxTotal)), style: chart.Dim},
-	}, innerW, 2)
-	extras = append(extras, metricRows(netIssueCells(n), innerW, 2)...)
-	lines := renderStatBlocks(blocks, innerW, innerH, extras)
-	border, titleStyle := frameTheme("网络")
-	return chart.FrameColored("速率", "", lines, w, h, border, titleStyle)
-}
-
-// netExpandedPanel 在放大态扩大右侧明细，补齐接口、累计和错误/丢包，避免只有两个进度条。
+// netExpandedPanel 用同一套整宽动态图布局，并在底部补充接口、IPv4、累计和错误/丢包。
 func (m Model) netExpandedPanel(w, h int) []string {
-	innerW, innerH := innerSize(w, h)
 	n := primaryNet(m.sample)
-	if n == nil || innerW < 80 || innerH < 8 {
+	if n == nil {
 		return m.netPanel(w, h)
 	}
-	detailNeed := max(innerW/3, 34)
-	gw, dw, ok := splitColumns(innerW, detailNeed, 48)
-	if !ok {
-		return m.netPanel(w, h)
-	}
-	slots := historySlots(gw)
-	graph := chart.FillMirror(tailHist(m.hist.txPlot.all(), slots), tailHist(m.hist.rxPlot.all(), slots), slots, gw, innerH,
-		100, 100, chart.SeriesCyan, chart.SeriesBlue)
-	box := m.netExpandedStatsBox(dw, innerH)
-	if box == nil {
+	innerW, innerH := innerSize(w, h)
+	lines := m.netWideBody(innerW, innerH, n, true)
+	if lines == nil {
 		return m.netPanel(w, h)
 	}
 	value := "↓" + chart.Rate(n.RxRate) + " ↑" + chart.Rate(n.TxRate)
@@ -1703,44 +1698,7 @@ func (m Model) netExpandedPanel(w, h int) []string {
 	if n.IP != "" {
 		title += " " + n.IP
 	}
-	return framed(title, value, zipColumns(graph, box, gw, dw, innerH), w, h)
-}
-
-func (m Model) netExpandedStatsBox(w, h int) []string {
-	n := primaryNet(m.sample)
-	if n == nil || w < 12 || h < 4 {
-		return nil
-	}
-	innerW, innerH := w-4, h-2
-	scale := max(m.hist.netScale, netMinScale)
-	pct := func(v float64) float64 {
-		if !n.HasRate || scale <= 0 {
-			return 0
-		}
-		return v / scale * 100
-	}
-	rate := func(v float64) string {
-		if !n.HasRate {
-			return "[--]"
-		}
-		return chart.Rate(v)
-	}
-	blocks := []statBlock{
-		{"↓ 下载", rate(n.RxRate), pct(n.RxRate), chart.SeriesBlue},
-		{"↑ 上传", rate(n.TxRate), pct(n.TxRate), chart.SeriesCyan},
-	}
-	extras := metricRows([]metricCell{
-		{label: "接口", value: n.Name, style: chart.Dim},
-		{label: "IPv4", value: n.IP, style: chart.Dim},
-	}, innerW, 2)
-	extras = append(extras, metricRows([]metricCell{
-		{label: "↓ 累计", value: chart.Bytes(float64(n.RxTotal)), style: chart.Dim},
-		{label: "↑ 累计", value: chart.Bytes(float64(n.TxTotal)), style: chart.Dim},
-	}, innerW, 2)...)
-	extras = append(extras, metricRows(netIssueCells(n), innerW, 2)...)
-	lines := renderStatBlocks(blocks, innerW, innerH, extras)
-	border, titleStyle := frameTheme("网络")
-	return chart.FrameColored("速率", "", lines, w, h, border, titleStyle)
+	return framed(title, value, lines, w, h)
 }
 
 // historySlots 返回历史图在指定字符宽度下的横轴槽位数。宽度足够时一个采样占一个
